@@ -21,6 +21,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch_geometric import nn as geom_nn
 from torch.utils.checkpoint import checkpoint
+import torch_scatter
 
 from .Base import Base
 
@@ -84,7 +85,7 @@ class CHIRALStack(Base):
             return geom_nn.Sequential(
                 "x, xc, v, pos, edge_index, diff, dist",
                 [
-                    (self_inter, "x, xc, edge_index, pos -> xc"),
+                    (self_inter, "x, xc, edge_index, pos -> x, xc"),
                     # (cross_inter, "x, v -> x"),
                     # (node_embed_out, "x -> x"),
                     # (vec_embed_out, "v -> v") if vec_embed_out else (lambda v: v, "v -> v"),
@@ -95,7 +96,7 @@ class CHIRALStack(Base):
             return geom_nn.Sequential(
                 "x, xc, v, pos, edge_index, diff, dist",
                 [
-                    (self_inter, "x, xc, edge_index, pos -> xc"),
+                    (self_inter, "x, xc, edge_index, pos -> x, xc"),
                     # (
                     #     cross_inter,
                     #     "x, v -> x",
@@ -118,7 +119,7 @@ class CHIRALStack(Base):
         pos = data.pos
 
         ### encoder part ####
-        for conv, feat_layer, chiral_update in zip(self.graph_convs, self.feature_layers, self.chiral_updates):
+        for conv, feat_layer in zip(self.graph_convs, self.feature_layers):
             if not self.conv_checkpointing:
                 c, xc, pos = conv(x=x, xc=xc, v=v, pos=pos, **conv_args)  # Added v here
             else:
@@ -170,7 +171,7 @@ class CHIRALStack(Base):
 
         # Apply cross-entropy loss
         # 'pred[0]' should have shape [batch_size, num_classes] and 'value' should have shape [batch_size]
-        class_weights = torch.tensor([1.0, 100.0, 100.0])  # Adjust the weights based on the class distribution
+        class_weights = torch.tensor([1.0, 50.0, 50.0])  # Adjust the weights based on the class distribution
         loss = F.cross_entropy(pred[0], value, weight=class_weights)
        
         # Calculate overall predictions
@@ -304,9 +305,16 @@ class ChiralMessage(torch.nn.Module):
         self.linear4 = torch.nn.Linear(node_size, node_size)
         self.linear5 = torch.nn.Linear(node_size, node_size)
         self.linear6 = torch.nn.Linear(node_size, node_size)
+        self.scalar_block = nn.Sequential(torch.nn.Linear(node_size, node_size), torch.nn.SiLU(), torch.nn.Linear(node_size, node_size))
     
     def forward(self, node_scalar, node_chiral, edge_index, pos):
         chiral_message = []
+        
+        # Gather messages from neighbors
+        neighbors_scalar = node_scalar[edge_index[:, 1]]
+        neighbors_message = torch_scatter.scatter(
+            self.scalar_block(neighbors_scalar), edge_index[:, 0], dim=0, dim_size=node_scalar.size(0), reduce="add"
+        )
         
         # Iterate over each base node in the graph
         unique_base_nodes = torch.unique(edge_index[:, 0])  # Get unique base nodes from edge_index[0]
@@ -321,7 +329,7 @@ class ChiralMessage(torch.nn.Module):
             node_message = process_triplets(base_scalar, neighbors_scalar, base_pos, neighbors_pos, self.linear1, self.linear2, self.linear3, self.linear4, self.linear5, self.linear6)
             chiral_message.append(node_message)
         
-        return node_chiral[unique_base_nodes] + torch.stack(chiral_message)
+        return (node_scalar + neighbors_message), (node_chiral[unique_base_nodes] + torch.stack(chiral_message))
 
 
 class ChiralUpdate(torch.nn.Module):
@@ -411,28 +419,13 @@ def process_triplets(base_scalar, neighbors_scalar, base_pos, neighbors_pos, lin
         rel_pos_ordered = [rel_pos[i] for i in ordering]  # List of 3 tensors
         neighbor_indices_ordered = [triplet[i] for i in ordering]  # Indices in neighbors_scalar
         neighbors_scalar_ordered = neighbors_scalar[neighbor_indices_ordered]  # Shape: (3, hidden_dim)
-        
-        # Look at indices for increasing or decreasing
-        # base_index = torch.argmax(base_scalar)
-        # indices = torch.argmax(neighbors_scalar_ordered, dim=1)  # Shape: (3,)
-        # is_increasing = check_increasing(indices)
-        # if is_increasing:
-        #     input_value = torch.tensor([1.0], device=neighbors_scalar.device)
-        # else:
-        #     input_value = torch.tensor([-1.0], device=neighbors_scalar.device)
-        
-        # Apply linear layers to neighbor scalars
-        # neighbors_scalar_emb = linear2(torch.nn.functional.silu(linear1(neighbors_scalar_ordered)))  # Shape: (3, hidden_dim)
-        # neighbors_scalar_emb = neighbors_scalar_ordered
+
+        # Get the embedding
         neighbors_scalar_emb = linear1(neighbors_scalar_ordered)
         
         # Create clockwise and counter-clockwise pairs
         prev_indices = (torch.arange(3) - 1) % 3  # [2, 0, 1]
         next_indices = (torch.arange(3) + 1) % 3  # [1, 2, 0]
-        
-        # Construct messages by concatenating embeddings of adjacent neighbor pairs
-        # clockwise_pairs = torch.cat([neighbors_scalar_emb, neighbors_scalar_emb[prev_indices]], dim=1)  # Shape: (3, 2 * hidden_dim)
-        # counter_clockwise_pairs = torch.cat([neighbors_scalar_emb, neighbors_scalar_emb[next_indices]], dim=1)  # Shape: (3, 2 * hidden_dim)
         
         # Compute messages
         # clockwise_message = linear4(torch.nn.functional.silu(linear3(clockwise_pairs)))  # Shape: (3, hidden_dim)
@@ -442,22 +435,14 @@ def process_triplets(base_scalar, neighbors_scalar, base_pos, neighbors_pos, lin
         message = clockwise_message - counter_clockwise_message  # Shape: (3, hidden_dim)
         
         # Compute chiral update
-        # chiral_update = clockwise_message - counter_clockwise_message  # Shape: (3, hidden_dim)
         chiral_update = linear4(torch.nn.functional.silu(linear3(message)))  # Shape: (3, hidden_dim)
         
         # Update neighbor scalars
         neighbors_chiral = linear6(torch.nn.functional.silu(linear5(neighbors_scalar_emb + chiral_update)))  # Shape: (3, hidden_dim)
-        # neighbors_chiral = linear6(torch.nn.functional.silu(linear5(neighbors_chiral)))  # Shape: (3, hidden_dim)
         
         # Aggregate updates for the base node (optional)
         base_update = torch.sum(neighbors_chiral, dim=0)  # Shape: (hidden_dim)
         base_updates.append(base_update)
-        
-        # Aggregate updates for neighbor nodes
-        # for idx, neighbor_idx in enumerate(neighbor_indices_ordered):
-        #     neighbor_updates[neighbor_idx] += neighbors_chiral[idx]
-        # base_update = torch.ones_like(base_scalar) * input_value
-        # base_updates.append(base_update)
         
     # Sum all base updates
     if base_updates:
