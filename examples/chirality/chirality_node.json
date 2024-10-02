@@ -30,33 +30,32 @@
         "num_radial": 5,
         "input_dim": 118,
         "hidden_dim": 118,
-        "num_conv_layers": 3,
+        "num_conv_layers": 1,
         "output_heads": {
-          "graph": {
-            "num_sharedlayers": 2,
-            "dim_sharedlayers": 30,
+          "node": {
             "num_headlayers": 2,
-            "dim_headlayers": [20,10]
+            "dim_headlayers": [30,10],
+            "type": "mlp"
           }
         },
         "task_weights": [1]
       },
       "Variables_of_interest": {
         "input_node_features": [0],
-        "output_names": ["top_score"],
-        "type": ["graph"],
-        "output_index": [0],
-        "output_dim": [1]
+        "output_names": ["chirality"],
+        "type": ["node"],
+        "output_index": [1],
+        "output_dim": [3]
       },
       "Training": {
         "num_epoch": 200,
-        "perc_train": 0.8,
-        "batch_size": 32,
+        "perc_train": 0.7,
+        "batch_size": 8,
         "patience": 20,
         "early_stopping": true,
         "Optimizer": {
           "type": "Adam",
-          "learning_rate": 0.002
+          "learning_rate": 0.001
         },
         "conv_checkpointing": false
       }

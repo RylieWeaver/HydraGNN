@@ -162,7 +162,7 @@ class CHIRALStack(Base):
             return outputs, outputs_var
         return outputs
     
-    def loss(useless1, pred, value, useless2):
+    def loss_ct(useless1, pred, value, useless2):
         # Reshape 'value' to [batch_size, 3] where each row is a one-hot encoding of the class
         value = value.view(-1, 3).long()
 
@@ -187,6 +187,16 @@ class CHIRALStack(Base):
             class_accuracies.append(accuracy)
             print(f"Accuracy for class {i}: {accuracy.item()}")
 
+        return loss, [loss]
+    
+    def loss(useless1, pred, value, useless2):
+        # Extract the first tensor from the list
+        pred_tensor = pred[0].view(-1)  # Flatten to match the shape of `value`
+        
+        # Compute the Mean Squared Error Loss
+        # loss = F.mse_loss(pred_tensor, value)
+        loss = F.l1_loss(pred_tensor, value)
+    
         return loss, [loss]
 
     def _multihead(self):
