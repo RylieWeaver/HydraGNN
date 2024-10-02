@@ -30,7 +30,7 @@ def download_file(url, filename):
             file.write(data)
 
 # Function to convert RDKit molecule to PyTorch Geometric Data object
-def mol_to_pyg_data(mol):
+def mol_to_pyg_data(row, mol):
     # Node features: atomic number, chirality
     atom_features = []
     atom_y = []
@@ -74,6 +74,7 @@ def mol_to_pyg_data(mol):
 
     # Create PyTorch Geometric Data object
     data = Data(x=atom_features, edge_index=edge_index, edge_attr=edge_features, pos=pos)
+    data.y = torch.tensor(row['top_score'], dtype=torch.float).unsqueeze(0)  # Target label
     data = process_data(data)
     
     return data
@@ -95,8 +96,7 @@ def process_and_save(split):
                 mol = Chem.AddHs(mol)  # Add explicit hydrogens
                 AllChem.EmbedMolecule(mol)  # Generate 3D coordinates
                 AllChem.UFFOptimizeMolecule(mol)  # Optimize using UFF
-                pyg_data = mol_to_pyg_data(mol)
-                # pyg_data.y = torch.tensor(row['top_score'], dtype=torch.float)  # Target label
+                pyg_data = mol_to_pyg_data(row, mol)
                 data_list.append(pyg_data)
             except Exception as e:
                 print(f"Skipping molecule {smiles} due to error: {e}")
@@ -113,16 +113,18 @@ def process_data(data):
     output_names = config["NeuralNetwork"]["Variables_of_interest"]["output_names"]
     type = config["NeuralNetwork"]["Variables_of_interest"]["type"]
     index = config["NeuralNetwork"]["Variables_of_interest"]["output_index"]
-    graph_feature_dim = None
-    node_feature_dim = config["Dataset"]["node_features"]["dim"]
+    graph_feature_dim = config["Dataset"]["graph_features"]["dim"]
+    # node_feature_dim = config["Dataset"]["node_features"]["dim"]
+    node_feature_dim = None
     # Call the function to update data.y and data.y_loc
     update_predicted_values(type, index, graph_feature_dim, node_feature_dim, data)
     data.x = data.x[:, :118]
+    data.y = data.y.squeeze(0)
     return data
 
-# Download datasets
-for split, url in urls.items():
-    download_file(url, f'{dataset_dir}/{split}.pickle')
+# # Download datasets
+# for split, url in urls.items():
+#     download_file(url, f'{dataset_dir}/{split}.pickle')
 
 # Process and save datasets
 for split in ['train', 'val', 'test']:
