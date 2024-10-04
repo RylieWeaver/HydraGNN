@@ -86,7 +86,7 @@ def create_chiral_instance():
 
 def process_data(data):
     # Configurable run choices (JSON file that accompanies this example script).
-    filename = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chirality.json")
+    filename = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chirality_custom.json")
     with open(filename, "r") as f:
         config = json.load(f)
     # Define the configuration parameters based on your needs
