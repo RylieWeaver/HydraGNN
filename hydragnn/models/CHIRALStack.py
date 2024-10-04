@@ -171,7 +171,7 @@ class CHIRALStack(Base):
 
         # Apply cross-entropy loss
         # 'pred[0]' should have shape [batch_size, num_classes] and 'value' should have shape [batch_size]
-        class_weights = torch.tensor([1.0, 50.0, 50.0])  # Adjust the weights based on the class distribution
+        class_weights = torch.tensor([1.0, 50.0, 50.0]).to('cuda:0')  # Adjust the weights based on the class distribution
         loss = F.cross_entropy(pred[0], value, weight=class_weights)
        
         # Calculate overall predictions
@@ -316,30 +316,35 @@ class ChiralMessage(torch.nn.Module):
         self.linear5 = torch.nn.Linear(node_size, node_size)
         self.linear6 = torch.nn.Linear(node_size, node_size)
         self.scalar_block = nn.Sequential(torch.nn.Linear(node_size, node_size), torch.nn.SiLU(), torch.nn.Linear(node_size, node_size))
+        self.node_embed = nn.Sequential(torch.nn.Linear(node_size, node_size), torch.nn.SiLU(), torch.nn.Linear(node_size, node_size))
+        self.chiral_embed = nn.Sequential(torch.nn.Linear(node_size, node_size), torch.nn.SiLU(), torch.nn.Linear(node_size, node_size))
     
     def forward(self, node_scalar, node_chiral, edge_index, pos):
         chiral_message = []
         
-        # Gather messages from neighbors
+        # Process base and neighbor nodes
+        node_embed = self.node_embed(node_scalar)
         neighbors_scalar = node_scalar[edge_index[:, 1]]
         neighbors_message = torch_scatter.scatter(
             self.scalar_block(neighbors_scalar), edge_index[:, 0], dim=0, dim_size=node_scalar.size(0), reduce="add"
         )
         
-        # Iterate over each base node in the graph
-        unique_base_nodes = torch.unique(edge_index[:, 0])  # Get unique base nodes from edge_index[0]
+        # # Iterate over each base node in the graph
+        # unique_base_nodes = torch.unique(edge_index[:, 0])  # Get unique base nodes from edge_index[0]
         
-        for base_node_idx in unique_base_nodes:
-            # Base node info
-            base_scalar = node_scalar[base_node_idx]
-            base_pos = pos[base_node_idx]
-            neighbors = edge_index[:, 1][edge_index[:, 0] == base_node_idx]
-            neighbors_scalar = node_scalar[neighbors]
-            neighbors_pos = pos[neighbors]
-            node_message = process_triplets(base_scalar, neighbors_scalar, base_pos, neighbors_pos, self.linear1, self.linear2, self.linear3, self.linear4, self.linear5, self.linear6)
-            chiral_message.append(node_message)
+        # for base_node_idx in unique_base_nodes:
+        #     # Base node info
+        #     base_scalar = node_scalar[base_node_idx]
+        #     base_pos = pos[base_node_idx]
+        #     neighbors = edge_index[:, 1][edge_index[:, 0] == base_node_idx]
+        #     neighbors_scalar = node_scalar[neighbors]
+        #     neighbors_pos = pos[neighbors]
+        #     node_message = process_triplets(base_scalar, neighbors_scalar, base_pos, neighbors_pos, self.linear1, self.linear2, self.linear3, self.linear4, self.linear5, self.linear6)
+        #     chiral_message.append(node_message)
+        # chiral = self.chiral_embed(node_chiral[unique_base_nodes] + torch.stack(chiral_message))
+        chiral = torch.zeros_like(node_chiral)  # Placeholder for now
         
-        return (node_scalar + neighbors_message), (node_chiral[unique_base_nodes] + torch.stack(chiral_message))
+        return (node_embed + neighbors_message), chiral
 
 
 class ChiralUpdate(torch.nn.Module):

@@ -86,7 +86,7 @@ def process_and_save(split):
         data_df = pickle.load(f)
     
     data_list = []
-    data_df = data_df.sample(frac=0.05)  # Shuffle the dataset
+    data_df = data_df.sample(frac=0.1)  # Shuffle the dataset
     # data_df = data_df[:3000]
     for idx, row in tqdm(data_df.iterrows(), total=len(data_df), desc=f'Processing {split} dataset'):
         smiles = row['ID']
@@ -106,25 +106,26 @@ def process_and_save(split):
     
 def process_data(data):
     # Configurable run choices (JSON file that accompanies this example script).
-    filename = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chirality.json")
+    filename = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chirality_node.json")
     with open(filename, "r") as f:
         config = json.load(f)
     # Define the configuration parameters based on your needs
     output_names = config["NeuralNetwork"]["Variables_of_interest"]["output_names"]
     type = config["NeuralNetwork"]["Variables_of_interest"]["type"]
     index = config["NeuralNetwork"]["Variables_of_interest"]["output_index"]
-    graph_feature_dim = config["Dataset"]["graph_features"]["dim"]
-    # node_feature_dim = config["Dataset"]["node_features"]["dim"]
-    node_feature_dim = None
+    # graph_feature_dim = config["Dataset"]["graph_features"]["dim"]
+    graph_feature_dim = None
+    node_feature_dim = config["Dataset"]["node_features"]["dim"]
+    # node_feature_dim = None
     # Call the function to update data.y and data.y_loc
     update_predicted_values(type, index, graph_feature_dim, node_feature_dim, data)
     data.x = data.x[:, :118]
     data.y = data.y.squeeze(0)
     return data
 
-# # Download datasets
-# for split, url in urls.items():
-#     download_file(url, f'{dataset_dir}/{split}.pickle')
+# Download datasets
+for split, url in urls.items():
+    download_file(url, f'{dataset_dir}/{split}.pickle')
 
 # Process and save datasets
 for split in ['train', 'val', 'test']:

@@ -23,7 +23,7 @@ except:
     os.environ["SERIALIZED_DATA_PATH"] = os.getcwd()
 
 # Configurable run choices (JSON file that accompanies this example script).
-filename = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chirality.json")
+filename = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chirality_node.json")
 with open(filename, "r") as f:
     config = json.load(f)
 verbosity = config["Verbosity"]["level"]
@@ -42,7 +42,7 @@ hydragnn.utils.setup_log(log_name)
 # NOTE: transforms/filters will NOT be re-run unless the qm9/processed/ directory is removed.
 # Load datasets
 def load_dataset(split):
-    dataset_dir = './binding_affinity_data'
+    dataset_dir = './binding_affinity_data_tags'
     return torch.load(os.path.join(dataset_dir, f'{split}.pt'))
 
 # Load train, val, and test datasets
@@ -53,7 +53,7 @@ test_data = load_dataset('test')
 # Combine the datasets into one list
 dataset = train_data + val_data + test_data
 # dataset = torch.load('./chiral_tetrahedron_dataset_with_positions_and_triples.pt')
-# dataset = dataset[:10000]
+# dataset = dataset[:6000]
 train, val, test = hydragnn.preprocess.split_dataset(
     dataset, config["NeuralNetwork"]["Training"]["perc_train"], False
 )

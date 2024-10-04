@@ -24,7 +24,7 @@ from hydragnn.models.SCFStack import SCFStack
 from hydragnn.models.DIMEStack import DIMEStack
 from hydragnn.models.EGCLStack import EGCLStack
 from hydragnn.models.PAINNStack import PAINNStack
-from hydragnn.models.CHIRALStack import CHIRALStack
+from hydragnn.models.CHIRALStack_new import CHIRALStack
 
 from hydragnn.utils.distributed import get_device
 from hydragnn.utils.print_utils import print_distributed
