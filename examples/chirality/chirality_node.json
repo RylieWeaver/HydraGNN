@@ -29,12 +29,12 @@
         "envelope_exponent": 5,
         "num_radial": 5,
         "input_dim": 118,
-        "hidden_dim": 32,
-        "num_conv_layers": 4,
+        "hidden_dim": 48,
+        "num_conv_layers": 1,
         "output_heads": {
           "node": {
             "num_headlayers": 2,
-            "dim_headlayers": [30,10],
+            "dim_headlayers": [40,20],
             "type": "mlp"
           }
         },
@@ -49,8 +49,8 @@
       },
       "Training": {
         "num_epoch": 200,
-        "perc_train": 0.7,
-        "batch_size": 256,
+        "perc_train": 0.8,
+        "batch_size": 128,
         "patience": 20,
         "early_stopping": true,
         "Optimizer": {

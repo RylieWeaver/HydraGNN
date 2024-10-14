@@ -185,8 +185,29 @@ def train_validate_test(
             model,
             verbosity,
             reduce_ranks=True,
-            return_samples=plot_hist_solution,
+            # return_samples=plot_hist_solution,
+            return_samples=True,
         )
+        ##############################
+        # Print Accuracies
+        ## Shape Outputs
+        value = true_values[0].view(-1, 3)
+        value = torch.argmax(value, dim=1).long()
+        pred = predicted_values[0].view(-1, 3)
+        pred = torch.argmax(pred, dim=1).long()
+        ## Calculate accuracy for each class
+        class_accuracies = []
+        for i in range(3):  # Assuming 3 classes
+            mask = (value == i)  # Identify samples of class 'i'
+            if mask.sum() > 0:  # Avoid division by zero
+                accuracy = (pred[mask] == value[mask]).float().mean()
+            else:
+                accuracy = torch.tensor(0.0, device=pred[0].device)  # If no samples for this class, accuracy is 0
+            class_accuracies.append(accuracy)
+            print("-------------------------------------------------------------")
+            print(f"Whole Test Dataset Accuracy for class {i}: {accuracy.item()}")
+            print("-------------------------------------------------------------")
+            ##############################
         scheduler.step(val_loss)
         if writer is not None:
             writer.add_scalar("train error", train_loss, epoch)

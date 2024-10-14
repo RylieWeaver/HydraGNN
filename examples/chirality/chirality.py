@@ -53,7 +53,7 @@ test_data = load_dataset('test')
 # Combine the datasets into one list
 dataset = train_data + val_data + test_data
 # dataset = torch.load('./chiral_tetrahedron_dataset_with_positions_and_triples.pt')
-# dataset = dataset[:6000]
+# dataset = dataset[:3000]
 train, val, test = hydragnn.preprocess.split_dataset(
     dataset, config["NeuralNetwork"]["Training"]["perc_train"], False
 )
