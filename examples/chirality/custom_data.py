@@ -68,7 +68,7 @@ def create_chiral_instance():
     # Step 10.6: Compute the scalar triple product using the relative vectors
     if relative_vectors.shape[0] == 3:  # Only proceed if there are exactly 3 non-zero vectors
         a, b, c = relative_vectors[0], relative_vectors[1], relative_vectors[2]
-        scalar_triple_value = torch.dot(a, torch.cross(b, c))
+        scalar_triple_value = torch.dot(a, torch.linalg.cross(b, c))
     elif relative_vectors.shape[0] == 1:
         scalar_triple_value = torch.tensor(0.0)  # Default if we only have 1 non-zero vector
     else:

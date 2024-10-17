@@ -30,11 +30,11 @@ verbosity = config["Verbosity"]["level"]
 var_config = config["NeuralNetwork"]["Variables_of_interest"]
 
 # Always initialize for multi-rank training.
-world_size, world_rank = hydragnn.utils.setup_ddp()
+world_size, world_rank = hydragnn.utils.distributed.setup_ddp()
 
 log_name = "chirality"
 # Enable print to log file.
-hydragnn.utils.setup_log(log_name)
+hydragnn.utils.print.setup_log(log_name)
 
 # Use built-in torch_geometric dataset.
 # Filter function above used to run quick example.
@@ -46,13 +46,13 @@ def load_dataset(split):
     return torch.load(os.path.join(dataset_dir, f'{split}.pt'))
 
 # Load train, val, and test datasets
-train_data = load_dataset('train')
-val_data = load_dataset('val')
-test_data = load_dataset('test')
+# train_data = load_dataset('train')
+# val_data = load_dataset('val')
+# test_data = load_dataset('test')
 
 # Combine the datasets into one list
-dataset = train_data + val_data + test_data
-# dataset = torch.load('./chiral_tetrahedron_dataset_with_positions_and_triples.pt')
+# dataset = train_data + val_data + test_data
+dataset = torch.load('./chiral_tetrahedron_dataset_with_positions_and_triples.pt')
 # dataset = dataset[:3000]
 train, val, test = hydragnn.preprocess.split_dataset(
     dataset, config["NeuralNetwork"]["Training"]["perc_train"], False
@@ -61,13 +61,13 @@ train, val, test = hydragnn.preprocess.split_dataset(
     train, val, test, config["NeuralNetwork"]["Training"]["batch_size"]
 )
 
-config = hydragnn.utils.update_config(config, train_loader, val_loader, test_loader)
+config = hydragnn.utils.input_config_parsing.update_config(config, train_loader, val_loader, test_loader)
 
 model = hydragnn.models.create_model_config(
     config=config["NeuralNetwork"],
     verbosity=verbosity,
 )
-model = hydragnn.utils.get_distributed_model(model, verbosity)
+model = hydragnn.utils.distributed.get_distributed_model(model, verbosity)
 
 learning_rate = config["NeuralNetwork"]["Training"]["Optimizer"]["learning_rate"]
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
@@ -76,8 +76,8 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
 )
 
 # Run training with the given model and qm9 dataset.
-writer = hydragnn.utils.get_summary_writer(log_name)
-hydragnn.utils.save_config(config, log_name)
+writer = hydragnn.utils.model.get_summary_writer(log_name)
+hydragnn.utils.input_config_parsing.save_config(config, log_name)
 
 hydragnn.train.train_validate_test(
     model,
