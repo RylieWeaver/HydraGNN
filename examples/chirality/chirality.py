@@ -42,7 +42,7 @@ hydragnn.utils.setup_log(log_name)
 # NOTE: transforms/filters will NOT be re-run unless the qm9/processed/ directory is removed.
 # Load datasets
 def load_dataset(split):
-    dataset_dir = './binding_affinity_data_tags'
+    dataset_dir = './binding_affinity_data/'
     return torch.load(os.path.join(dataset_dir, f'{split}.pt'))
 
 # Load train, val, and test datasets

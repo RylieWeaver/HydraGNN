@@ -30,7 +30,7 @@ def download_file(url, filename):
             file.write(data)
 
 # Function to convert RDKit molecule to PyTorch Geometric Data object
-def mol_to_pyg_data(row, mol):
+def mol_to_pyg_data_og(row, mol):
     # Node features: atomic number, chirality
     atom_features = []
     atom_y = []
@@ -79,6 +79,112 @@ def mol_to_pyg_data(row, mol):
     
     return data
 
+# Function to convert RDKit molecule to PyTorch Geometric Data object
+def mol_to_pyg_data(row, mol):
+    # Ensure stereochemistry is assigned
+    Chem.AssignStereochemistry(mol, force=True, cleanIt=True)
+    
+    # Node features: atomic number, chirality, CIP rank
+    atom_features = []
+    for atom in mol.GetAtoms():
+        atomic_number = atom.GetAtomicNum()
+        atomic_one_hot = F.one_hot(torch.tensor(atomic_number), num_classes=118).float()  # One-hot encode atomic number
+        
+        # Get chirality
+        chirality_tag = atom.GetChiralTag()
+        chirality = int(chirality_tag)  # Chirality can be 0 (CHI_UNSPECIFIED), 1 (CHI_TETRAHEDRAL_CW), 2 (CHI_TETRAHEDRAL_CCW)
+        chirality_one_hot = F.one_hot(torch.tensor(chirality), num_classes=3).float()  # One-hot encode chirality
+        
+        # Get CIP code and rank if available
+        if atom.HasProp('_CIPCode'):
+            cip_code = atom.GetProp('_CIPCode')  # 'R' or 'S'
+            cip_code_one_hot = torch.tensor([1, 0]) if cip_code == 'R' else torch.tensor([0, 1])
+        else:
+            cip_code_one_hot = torch.tensor([0, 0])  # Not chiral
+        
+        # Get CIP ranks of neighbors
+        neighbor_cip_ranks = []
+        for neighbor in atom.GetNeighbors():
+            neighbor_rank = int(neighbor.GetProp('_CIPRank')) if neighbor.HasProp('_CIPRank') else 0
+            neighbor_cip_ranks.append(neighbor_rank)
+        # Pad or truncate to 4 neighbors
+        while len(neighbor_cip_ranks) < 4:
+            neighbor_cip_ranks.append(0)
+        neighbor_cip_ranks = neighbor_cip_ranks[:4]
+        neighbor_cip_ranks_tensor = torch.tensor(neighbor_cip_ranks, dtype=torch.float)
+        
+        # Concatenate all features
+        atom_feature = torch.cat([atomic_one_hot, chirality_one_hot])
+        atom_features.append(atom_feature)
+    
+    atom_features = torch.stack(atom_features)
+    
+    # Edge index, edge features, and edge_priority (single direction)
+    edge_index = []
+    edge_features = []
+    edge_priority = []
+
+    for bond in mol.GetBonds():
+        i = bond.GetBeginAtomIdx()
+        j = bond.GetEndAtomIdx()
+        bond_type = bond.GetBondTypeAsDouble()  # 1.0 for SINGLE, 2.0 for DOUBLE, etc.
+        is_aromatic = int(bond.GetIsAromatic())  # 1 if aromatic, 0 otherwise
+        
+        # Add edge (i -> j)
+        edge_index.append([i, j])
+        edge_features.append([bond_type, is_aromatic])
+        
+        # Assign priority for edge (i -> j) if atom_i is a chiral center
+        atom_i = mol.GetAtomWithIdx(i)
+        if atom_i.HasProp('_CIPCode') and atom_i.GetDegree() == 4:
+            atom_j = mol.GetAtomWithIdx(j)
+            cip_rank_j = int(atom_j.GetProp('_CIPRank')) if atom_j.HasProp('_CIPRank') else 0
+            edge_priority.append(cip_rank_j)
+        else:
+            edge_priority.append(0.0)
+        
+        # Add edge (j -> i)
+        edge_index.append([j, i])
+        edge_features.append([bond_type, is_aromatic])
+        
+        # Assign priority for edge (j -> i) if atom_j is a chiral center
+        atom_j = mol.GetAtomWithIdx(j)
+        if atom_j.HasProp('_CIPCode') and atom_j.GetDegree() == 4:
+            atom_i = mol.GetAtomWithIdx(i)
+            cip_rank_i = int(atom_i.GetProp('_CIPRank')) if atom_i.HasProp('_CIPRank') else 0
+            edge_priority.append(cip_rank_i)
+        else:
+            edge_priority.append(0.0)
+
+    # Convert lists to tensors
+    edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()  # Shape: [2, num_edges]
+    edge_features = torch.tensor(edge_features, dtype=torch.float)          # Shape: [num_edges, 2]
+    edge_priority = torch.tensor(edge_priority, dtype=torch.float)          # Shape: [num_edges]
+
+    # Continue with 3D positions (unchanged)
+    if mol.GetNumConformers() > 0:
+        conf = mol.GetConformer()
+        positions = []
+        for atom_idx in range(mol.GetNumAtoms()):
+            pos = conf.GetAtomPosition(atom_idx)
+            positions.append([pos.x, pos.y, pos.z])
+        pos = torch.tensor(positions, dtype=torch.float)
+    else:
+        pos = None
+
+    # Create PyTorch Geometric Data object
+    data = Data(x=atom_features, edge_index=edge_index, edge_attr=edge_features, pos=pos)
+    data.y = torch.tensor(row['top_score'], dtype=torch.float).unsqueeze(0)  # Target label
+
+    # Add edge_priority to data
+    data.edge_priority = edge_priority  # Shape: [num_edges]
+
+    # Process data as needed
+    data = process_data(data)
+
+    return data
+
+
 # Function to process the downloaded pickle files and convert to PyTorch Geometric dataset
 def process_and_save(split):
     pickle_file = f'{dataset_dir}/{split}.pickle'
@@ -86,7 +192,7 @@ def process_and_save(split):
         data_df = pickle.load(f)
     
     data_list = []
-    data_df = data_df.sample(frac=0.1)  # Shuffle the dataset
+    data_df = data_df.sample(frac=0.05)  # Shuffle the dataset
     # data_df = data_df[:3000]
     for idx, row in tqdm(data_df.iterrows(), total=len(data_df), desc=f'Processing {split} dataset'):
         smiles = row['ID']
@@ -123,9 +229,9 @@ def process_data(data):
     data.y = data.y.squeeze(0)
     return data
 
-# Download datasets
-for split, url in urls.items():
-    download_file(url, f'{dataset_dir}/{split}.pickle')
+# # Download datasets
+# for split, url in urls.items():
+#     download_file(url, f'{dataset_dir}/{split}.pickle')
 
 # Process and save datasets
 for split in ['train', 'val', 'test']:

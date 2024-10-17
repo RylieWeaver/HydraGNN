@@ -30,7 +30,7 @@
         "num_radial": 5,
         "input_dim": 118,
         "hidden_dim": 48,
-        "num_conv_layers": 1,
+        "num_conv_layers": 2,
         "output_heads": {
           "node": {
             "num_headlayers": 2,
