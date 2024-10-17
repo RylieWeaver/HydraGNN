@@ -18,7 +18,6 @@ import torch
 from torch import nn
 from torch_geometric import nn as geom_nn
 from torch.utils.checkpoint import checkpoint
-import torch.nn.functional as F
 
 from .Base import Base
 
