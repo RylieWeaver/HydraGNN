@@ -420,6 +420,25 @@ def create_model(
             num_conv_layers=num_conv_layers,
             num_nodes=num_nodes,
         )
+        
+    elif model_type == "CHIRAL":
+        model = CHIRALStack(
+            # edge_dim,   # To-do add edge_features
+            num_radial,
+            radius,
+            input_dim,
+            hidden_dim,
+            output_dim,
+            output_type,
+            output_heads,
+            activation_function,
+            loss_function_type,
+            equivariance,
+            loss_weights=task_weights,
+            freeze_conv=freeze_conv,
+            num_conv_layers=num_conv_layers,
+            num_nodes=num_nodes,
+        )
     else:
         raise ValueError("Unknown model_type: {0}".format(model_type))
 
