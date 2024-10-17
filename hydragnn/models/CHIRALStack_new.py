@@ -152,14 +152,14 @@ class CHIRALStack(Base):
         # Apply cross-entropy loss
         # 'pred[0]' should have shape [num_nodes, num_classes] and 'value' should have shape [num_nodes]
         # class_weights = torch.tensor([0.1, 50.0, 50.0]).to('cuda:0')  # Adjust the weights based on the class distribution
-        class_weights = torch.tensor([0.05, 50.0, 50.0])
+        class_weights = torch.tensor([0.1, 50.0, 50.0])
         loss = F.cross_entropy(pred[0], value, weight=class_weights)
        
         # Calculate overall predictions
         predictions = torch.argmax(pred[0], dim=1)
         # Calculate accuracy for each class
         class_accuracies = []
-        if torch.rand(1) < 0.99:  # Print only 1% of the time
+        if torch.rand(1) < 0.09:  # Print only 1% of the time
             for i in range(3):  # Assuming 3 classes
                 mask = (value == i)  # Identify samples of class 'i'
                 if mask.sum() > 0:  # Avoid division by zero
