@@ -102,7 +102,15 @@ class PNAPlusStack(Base):
         ), "PNA+ requires node positions (data.pos) to be set."
 
         j, i = data.edge_index  # j->i
-        dist = (data.pos[i] - data.pos[j]).pow(2).sum(dim=-1).sqrt()
+
+        # Extract supercell size along each dimension
+        # Assuming data.supercell_size is a 3x3 tensor, extract the diagonal elements
+        supercell_size = torch.diagonal(data.supercell_size, 0)  # Shape: (3,)
+
+        # Compute distance vectors between positions i and j, adjusted for PBCs
+        distance_vectors = self.get_distance_vectors(data.pos[i], data.pos[j], supercell_size)
+        dist = distance_vectors.pow(2).sum(dim=-1).sqrt()
+
         rbf = self.rbf(dist)
         # rbf = dist.unsqueeze(-1)
         conv_args = {"edge_index": data.edge_index.to(torch.long), "rbf": rbf}
@@ -114,6 +122,31 @@ class PNAPlusStack(Base):
             conv_args.update({"edge_attr": data.edge_attr})
 
         return conv_args
+
+    def get_distance_vectors(self, pos1, pos2, supercell_size):
+        """
+        Compute distance vectors between two sets of positions, adjusting for periodic boundary conditions.
+        
+        Parameters:
+        - pos1: Tensor of shape (N, 3)
+        - pos2: Tensor of shape (N, 3)
+        - supercell_size: Tensor of shape (3,), containing the size of the supercell along each dimension
+        
+        Returns:
+        - distance_vectors: Tensor of shape (N, 3), adjusted for PBCs
+        """
+        distance_vectors = pos2 - pos1  # Shape: (N, 3)
+        half_size = supercell_size / 2  # Shape: (3,)
+
+        # Adjust for PBCs along each dimension
+        for dim in range(3):
+            dim_size = supercell_size[dim]
+            over_half = distance_vectors[:, dim] > half_size[dim]
+            under_half = distance_vectors[:, dim] < -half_size[dim]
+            distance_vectors[over_half, dim] -= dim_size
+            distance_vectors[under_half, dim] += dim_size
+
+        return distance_vectors
 
     def __str__(self):
         return "PNAStack"

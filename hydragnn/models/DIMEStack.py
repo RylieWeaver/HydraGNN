@@ -119,18 +119,36 @@ class DIMEStack(Base):
         assert (
             data.pos is not None
         ), "DimeNet requires node positions (data.pos) to be set."
+
+        # Extract indices for triplets
         i, j, idx_i, idx_j, idx_k, idx_kj, idx_ji = triplets(
             data.edge_index, num_nodes=data.x.size(0)
         )
-        dist = (data.pos[i] - data.pos[j]).pow(2).sum(dim=-1).sqrt()
 
-        # Calculate angles.
+        # Extract supercell size along each dimension
+        # Assuming data.supercell_size is a 3x3 tensor, extract the diagonal elements
+        supercell_size = torch.diagonal(data.supercell_size, 0)  # Shape: (3,)
+
+        # Compute distance vectors between positions i and j, adjusted for PBCs
+        distance_vectors = self.get_distance_vectors(data.pos[i], data.pos[j], supercell_size)
+        dist = distance_vectors.pow(2).sum(dim=-1).sqrt()
+
+        # Calculate angles for triplets
         pos_i = data.pos[idx_i]
-        pos_ji, pos_ki = data.pos[idx_j] - pos_i, data.pos[idx_k] - pos_i
+        pos_j = data.pos[idx_j]
+        pos_k = data.pos[idx_k]
+
+        # Adjust distance vectors for PBCs
+        pos_ji = self.get_distance_vectors(pos_i, pos_j, supercell_size)
+        pos_kj = self.get_distance_vectors(pos_j, pos_k, supercell_size)
+        pos_ki = pos_kj + pos_ji
+
+        # Compute angles using adjusted vectors
         a = (pos_ji * pos_ki).sum(dim=-1)
         b = torch.cross(pos_ji, pos_ki).norm(dim=-1)
         angle = torch.atan2(b, a)
 
+        # Compute radial and spherical basis functions
         rbf = self.rbf(dist)
         sbf = self.sbf(dist, angle, idx_kj)
 
@@ -144,6 +162,31 @@ class DIMEStack(Base):
         }
 
         return conv_args
+
+    def get_distance_vectors(self, pos1, pos2, supercell_size):
+        """
+        Compute distance vectors between two sets of positions, adjusting for periodic boundary conditions.
+        
+        Parameters:
+        - pos1: Tensor of shape (N, 3)
+        - pos2: Tensor of shape (N, 3)
+        - supercell_size: Tensor of shape (3,), containing the size of the supercell along each dimension
+        
+        Returns:
+        - distance_vectors: Tensor of shape (N, 3), adjusted for PBCs
+        """
+        distance_vectors = pos2 - pos1  # Shape: (N, 3)
+        half_size = supercell_size / 2  # Shape: (3,)
+
+        # Adjust for PBCs along each dimension
+        for dim in range(3):
+            dim_size = supercell_size[dim]
+            over_half = distance_vectors[:, dim] > half_size[dim]
+            under_half = distance_vectors[:, dim] < -half_size[dim]
+            distance_vectors[over_half, dim] -= dim_size
+            distance_vectors[under_half, dim] += dim_size
+
+        return distance_vectors
 
 
 """

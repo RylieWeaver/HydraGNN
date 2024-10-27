@@ -398,10 +398,10 @@ class Base(Module):
         ), "No gradients were found for data.pos. Does your model use positions for prediction?"
         forces_pred = -forces_pred
         force_loss_weight = (
-            energy_loss_weight
-            * torch.mean(torch.abs(graph_energy_true))
-            / (torch.mean(torch.abs(forces_true)) + 1e-8)
-        )  # Weight force loss and graph energy equally
+            (energy_loss_weight
+            * torch.std(graph_energy_true))
+            / ((torch.std(forces_true) + 1e-8))
+        )  # Weight force loss and graph energy equally based on their variation
         tot_loss += (
             self.loss_function(forces_pred, forces_true) * force_loss_weight
         )  # Have force-weight be the complement to energy-weight

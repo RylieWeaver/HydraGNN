@@ -37,9 +37,9 @@ from hydragnn.utils.distributed import nsplit
 from hydragnn.preprocess.graph_samples_checks_and_updates import get_radius_graph_pbc
 
 # Angstrom unit
-primitive_bravais_lattice_constant_x = 3.8
-primitive_bravais_lattice_constant_y = 3.8
-primitive_bravais_lattice_constant_z = 3.8
+# primitive_bravais_lattice_constant_x = 3.8
+# primitive_bravais_lattice_constant_y = 3.8
+# primitive_bravais_lattice_constant_z = 3.8
 
 
 ##################################################################################################################
@@ -49,12 +49,14 @@ primitive_bravais_lattice_constant_z = 3.8
 
 
 def create_dataset(path, config):
+    print("----------------------------------CREATING DATASET----------------------------------")
     radius_cutoff = config["NeuralNetwork"]["Architecture"]["radius"]
     number_configurations = (
         config["Dataset"]["number_configurations"]
         if "number_configurations" in config["Dataset"]
         else 300
     )
+    primitive_bravais_lattice_constant_x = primitive_bravais_lattice_constant_y = primitive_bravais_lattice_constant_z = config["Dataset"]["primitive_bravais_constant"]
     atom_types = [1]
     formula = LJpotential(1.0, 3.4)
     atomic_structure_handler = AtomicStructureHandler(
@@ -70,9 +72,12 @@ def create_dataset(path, config):
     deterministic_graph_data(
         path,
         atom_types,
+        primitive_bravais_lattice_constant_x,
+        primitive_bravais_lattice_constant_y,
+        primitive_bravais_lattice_constant_z,
         atomic_structure_handler=atomic_structure_handler,
         radius_cutoff=radius_cutoff,
-        relative_maximum_atomic_displacement=1e-1,
+        relative_maximum_atomic_displacement=2e-1,
         number_configurations=number_configurations,
     )
 
@@ -95,6 +100,7 @@ class LJDataset(AbstractBaseDataset):
             self.rank = torch.distributed.get_rank()
 
         self.radius = config["NeuralNetwork"]["Architecture"]["radius"]
+        primitive_bravais_lattice_constant_x = primitive_bravais_lattice_constant_y = primitive_bravais_lattice_constant_z = config["Dataset"]["primitive_bravais_constant"]
         self.max_neighbours = config["NeuralNetwork"]["Architecture"]["max_neighbours"]
 
         dirfiles = sorted(os.listdir(dirpath))
@@ -104,6 +110,8 @@ class LJDataset(AbstractBaseDataset):
         for file in rx:
             filepath = os.path.join(dirpath, file)
             self.dataset.append(self.transform_input_to_data_object_base(filepath))
+        print("----------------------------------CHECKPOINT CREATED DATASET----------------------------------")
+
 
     def transform_input_to_data_object_base(self, filepath):
 
@@ -157,6 +165,9 @@ class LJDataset(AbstractBaseDataset):
         forces = torch_data[:, [5, 6, 7]]
         forces_pre_scaling_factor = 1.0
         forces_pre_scaled = forces * forces_pre_scaling_factor
+        # Scaling
+        log_total_energy = torch.log(torch.tensor(total_energy).unsqueeze(0) + 1000.0)
+        forces_chain_rule = forces / (total_energy + 1000.0)
 
         data = Data(
             supercell_size=torch_supercell.to(torch.float32),
@@ -165,7 +176,8 @@ class LJDataset(AbstractBaseDataset):
             forces_pre_scaling_factor=torch.tensor(forces_pre_scaling_factor).to(
                 torch.float32
             ),
-            forces=forces,
+            # forces=forces,
+            forces=forces_chain_rule,
             forces_pre_scaled=forces_pre_scaled,
             pos=torch_data[:, [1, 2, 3]].to(torch.float32),
             x=torch.cat([torch_data[:, [0, 4]]], axis=1).to(torch.float32),
@@ -173,7 +185,8 @@ class LJDataset(AbstractBaseDataset):
             energy_per_atom=torch.tensor(energy_per_atom_pretransformed)
             .unsqueeze(0)
             .to(torch.float32),
-            energy=torch.tensor(total_energy).unsqueeze(0).to(torch.float32),
+            # energy=torch.tensor(total_energy).unsqueeze(0).to(torch.float32),
+            energy=torch.tensor(log_total_energy).to(torch.float32),
         )
 
         # Create pbc edges and lengths
@@ -195,14 +208,17 @@ class LJDataset(AbstractBaseDataset):
 def deterministic_graph_data(
     path: str,
     atom_types: list,
+    primitive_bravais_lattice_constant_x,
+    primitive_bravais_lattice_constant_y,
+    primitive_bravais_lattice_constant_z,
     atomic_structure_handler,
     radius_cutoff=float("inf"),
     max_num_neighbors=float("inf"),
     number_configurations: int = 500,
     configuration_start: int = 0,
-    unit_cell_x_range: list = [3, 4],
-    unit_cell_y_range: list = [3, 4],
-    unit_cell_z_range: list = [3, 4],
+    # unit_cell_x_range: list = [3, 4],
+    # unit_cell_y_range: list = [3, 4],
+    # unit_cell_z_range: list = [3, 4],
     relative_maximum_atomic_displacement: float = 1e-1,
 ):
 
@@ -215,22 +231,10 @@ def deterministic_graph_data(
         os.makedirs(path, exist_ok=False)
     comm.Barrier()
 
-    # We assume that the unit cell is Simple Center Cubic (SCC)
-    unit_cell_x = torch.randint(
-        unit_cell_x_range[0],
-        unit_cell_x_range[1],
-        (number_configurations,),
-    )
-    unit_cell_y = torch.randint(
-        unit_cell_y_range[0],
-        unit_cell_y_range[1],
-        (number_configurations,),
-    )
-    unit_cell_z = torch.randint(
-        unit_cell_z_range[0],
-        unit_cell_z_range[1],
-        (number_configurations,),
-    )
+    # Fixed unit cell size of 3 for x, y, z axes repeated for all configurations
+    unit_cell_x = torch.tensor([3]).repeat(number_configurations)
+    unit_cell_y = torch.tensor([3]).repeat(number_configurations)
+    unit_cell_z = torch.tensor([3]).repeat(number_configurations)
 
     configurations_list = range(number_configurations)
     rx = list(nsplit(configurations_list, comm_size))[comm_rank]
@@ -247,11 +251,15 @@ def deterministic_graph_data(
             uc_x,
             uc_y,
             uc_z,
+            primitive_bravais_lattice_constant_x,
+            primitive_bravais_lattice_constant_y,
+            primitive_bravais_lattice_constant_z,
             atom_types,
             radius_cutoff,
             max_num_neighbors,
             relative_maximum_atomic_displacement,
         )
+    print("----------------------------------CHECKPOINT CREATED CONFIGURATIONS----------------------------------")
 
 
 def create_configuration(
@@ -262,6 +270,9 @@ def create_configuration(
     uc_x,
     uc_y,
     uc_z,
+    primitive_bravais_lattice_constant_x,
+    primitive_bravais_lattice_constant_y,
+    primitive_bravais_lattice_constant_z,
     types,
     radius_cutoff,
     max_num_neighbors,

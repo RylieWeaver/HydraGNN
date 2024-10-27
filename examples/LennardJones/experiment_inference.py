@@ -19,6 +19,7 @@ import argparse
 
 import torch
 import torch_scatter
+import torchmetrics
 import numpy as np
 
 import hydragnn
@@ -101,8 +102,7 @@ def getcolordensity(xdata, ydata):
     return hist2d_norm
 
 
-if __name__ == "__main__":
-
+def evaluate(modeltype):
     modelname = "LJ"
 
     parser = argparse.ArgumentParser()
@@ -132,6 +132,8 @@ if __name__ == "__main__":
     input_filename = os.path.join(dirpwd, args.inputfile)
     with open(input_filename, "r") as f:
         config = json.load(f)
+    config["NeuralNetwork"]["Architecture"]["model_type"] = modeltype
+    # config["Dataset"]["primitive_bravais_constant"] = primitive_bravais_constant
     hydragnn.utils.print.setup_log(get_log_name_config(config))
     ##################################################################################################################
     # Always initialize for multi-rank training.
@@ -182,21 +184,18 @@ if __name__ == "__main__":
     variable_index = 0
     # for output_name, output_type, output_dim in zip(config["NeuralNetwork"]["Variables_of_interest"]["output_names"], config["NeuralNetwork"]["Variables_of_interest"]["type"], config["NeuralNetwork"]["Variables_of_interest"]["output_dim"]):
 
-    test_MAE = 0.0
-
     num_samples = len(testset)
     energy_true_list = []
     energy_pred_list = []
     forces_true_list = []
     forces_pred_list = []
 
-    for data_id, data in enumerate(tqdm(trainset)):
+    for data_id, data in enumerate(tqdm(testset)):
         data.pos.requires_grad = True
         node_energy_pred = model(data.to(get_device()))[
             0
         ]  # Note that this is sensitive to energy and forces prediction being single-task (current requirement)
         energy_pred = torch.sum(node_energy_pred, dim=0).float()
-        test_MAE += torch.norm(energy_pred - data.energy, p=1).item() / len(testset)
         # predicted.backward(retain_graph=True)
         # gradients = data.pos.grad
         grads_energy = torch.autograd.grad(
@@ -206,10 +205,29 @@ if __name__ == "__main__":
             retain_graph=False,
             create_graph=True,
         )[0]
+        # De-Scale and add to list
+        forces_pred = -grads_energy * (energy_pred+1000)
+        forces_true = data.forces * (data.energy+1000)
+        energy_pred = torch.exp(energy_pred) - 1000.0
+        energy_true = torch.exp(data.energy) - 1000.0
         energy_pred_list.extend(energy_pred.tolist())
-        energy_true_list.extend(data.energy.tolist())
-        forces_pred_list.extend((-grads_energy).flatten().tolist())
-        forces_true_list.extend(data.forces.flatten().tolist())
+        energy_true_list.extend(energy_true.tolist())
+        forces_pred_list.extend((forces_pred).flatten().tolist())
+        forces_true_list.extend(forces_true.flatten().tolist())
+        # Add to list
+        # energy_pred_list.extend(energy_pred.tolist())
+        # energy_true_list.extend(data.energy.tolist())
+        # forces_pred_list.extend((-grads_energy).flatten().tolist())
+        # forces_true_list.extend(data.forces.flatten().tolist())
+    
+    # Get MSE losses
+    energy_loss = torch.nn.MSELoss()(torch.tensor(energy_pred_list), torch.tensor(energy_true_list))
+    forces_loss = torch.nn.MSELoss()(torch.tensor(forces_pred_list), torch.tensor(forces_true_list))
+    tasks_loss = [energy_loss, forces_loss]
+    # Get R2 values
+    energy_r2 = torchmetrics.R2Score()(torch.tensor(energy_pred_list), torch.tensor(energy_true_list))
+    forces_r2 = torchmetrics.R2Score()(torch.tensor(forces_pred_list), torch.tensor(forces_true_list))
+    tasks_r2 = [energy_r2, forces_r2]
 
     hist2d_norm = getcolordensity(energy_true_list, energy_pred_list)
 
@@ -225,17 +243,17 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.savefig(f"./energy_Scatterplot" + ".png", dpi=400)
 
-    print(f"Test MAE energy: ", test_MAE)
-
     hist2d_norm = getcolordensity(forces_pred_list, forces_true_list)
     fig, ax = plt.subplots()
-    plt.scatter(forces_pred_list, forces_true_list, s=8, c=hist2d_norm, vmin=0, vmax=1)
+    plt.scatter(forces_true_list, forces_pred_list, s=8, c=hist2d_norm, vmin=0, vmax=1)
     plt.clim(0, 1)
     ax.plot(ax.get_xlim(), ax.get_xlim(), ls="--", color="red")
     plt.colorbar()
-    plt.xlabel("Predicted Values")
-    plt.ylabel("True Values")
+    plt.xlabel("True Values")
+    plt.ylabel("Predicted Values")
     plt.title("Forces")
     plt.draw()
     plt.tight_layout()
     plt.savefig(f"./Forces_Scatterplot" + ".png", dpi=400)
+    
+    return [tasks_loss, tasks_r2]

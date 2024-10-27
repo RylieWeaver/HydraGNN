@@ -5,6 +5,7 @@
   "Dataset": {
     "name": "LJdataset",
     "format": "XYZ",
+    "number_configurations": 1000,
     "node_features": {
       "name": ["atom_type"],
       "dim": [1],
@@ -21,7 +22,7 @@
       "periodic_boundary_conditions": true,
       "model_type": "DimeNet",
       "radius": 5.0,
-      "max_neighbours": 5,
+      "max_neighbours": 20,
       "int_emb_size": 32,
       "out_emb_size": 16,
       "basis_emb_size": 8,
@@ -30,14 +31,14 @@
       "num_before_skip": 1,
       "num_after_skip": 1,
       "envelope_exponent": 5,
-      "num_radial": 5,
+      "num_radial": 8,
       "num_spherical": 2,
-      "hidden_dim": 20,
-      "num_conv_layers": 4,
+      "hidden_dim": 100,
+      "num_conv_layers": 1,
       "output_heads": {
         "node": {
           "num_headlayers": 2,
-          "dim_headlayers": [60,20],
+          "dim_headlayers": [40,20],
           "type": "mlp"
         }
       },
@@ -55,16 +56,17 @@
       "output_names": ["graph_energy"]
     },
     "Training": {
-      "num_epoch": 15,
-      "batch_size": 64,
+      "num_epoch": 75,
+      "batch_size": 32,
       "perc_train": 0.7,
       "patience": 20,
-      "early_stopping": true,
+      "EarlyStopping": true,
       "Optimizer": {
         "type": "Adam",
-        "learning_rate": 0.005
+        "learning_rate": 0.001
       },
-      "conv_checkpointing": false
+      "conv_checkpointing": false,
+      "compute_grad_energy": true
     }
   },
   "Visualization": {

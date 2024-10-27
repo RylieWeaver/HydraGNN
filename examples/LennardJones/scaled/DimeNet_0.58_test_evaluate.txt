@@ -1,0 +1,5 @@
+Primitive Bravais Constant: 0.58
+Test Energy Loss: 4.735758837081557e+22
+Test Force Loss: 55526.3671875
+Test Energy R2: -2.526585340499878
+Test Force R2: 0.12015336751937866

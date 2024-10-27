@@ -14,6 +14,7 @@ import os, json
 import logging
 import sys
 import argparse
+import numpy as np
 
 # Torch
 import torch
@@ -47,13 +48,18 @@ except ImportError:
     pass
 
 # Lennard Jones
-from LJ_data import create_dataset, LJDataset, info
+from experiment_data import create_dataset, LJDataset, info
+from experiment_inference import evaluate
 
 
 ##################################################################################################################
 
 
-if __name__ == "__main__":
+def generate_logspace(start, stop, num_points):
+    return np.logspace(np.log10(start), np.log10(stop), num_points)
+
+
+def run(model, primitive_bravais_constant):
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
@@ -102,11 +108,14 @@ if __name__ == "__main__":
     # Configurable run choices (JSON file that accompanies this example script).
     with open(input_filename, "r") as f:
         config = json.load(f)
-    config["NeuralNetwork"]["Architecture"]["model_type"] = (
-        args.model_type
-        if args.model_type
-        else config["NeuralNetwork"]["Architecture"]["model_type"]
-    )
+    # config["NeuralNetwork"]["Architecture"]["model_type"] = (
+    #     args.model_type
+    #     if args.model_type
+    #     else config["NeuralNetwork"]["Architecture"]["model_type"]
+    # )
+    config["NeuralNetwork"]["Architecture"]["model_type"] = model
+    config["Dataset"]["primitive_bravais_constant"] = primitive_bravais_constant
+    config["NeuralNetwork"]["Architecture"]["radius"] = 1.49*primitive_bravais_constant
     verbosity = config["Verbosity"]["level"]
     config["NeuralNetwork"]["Variables_of_interest"][
         "graph_feature_names"
@@ -261,7 +270,7 @@ if __name__ == "__main__":
             trainset.pna_deg = pna_deg
     else:
         raise NotImplementedError("No supported format: %s" % (args.format))
-    
+
     info(
         "trainset,valset,testset size: %d %d %d"
         % (len(trainset), len(valset), len(testset))
@@ -329,4 +338,42 @@ if __name__ == "__main__":
             gp.pr_file(os.path.join("logs", log_name, "gp_timing.p%d" % rank))
         gp.pr_summary_file(os.path.join("logs", log_name, "gp_timing.summary"))
         gp.finalize()
-    sys.exit(0)
+    # sys.exit(0)
+    
+
+if __name__ == "__main__":
+    # Run Force and Energy prediction on Lennard-Jones dataset for each model and pravais constant
+    # models = ["DimeNet", "PNAPlus", "PAINN", "MACE"]
+    # primitive_bravais_constants = generate_logspace(0.1, 10, 5)
+    models = ["DimeNet"]
+    # primitive_bravais_constants = [0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.6]
+    primitive_bravais_constants = [0.61, 0.62, 0.63, 0.64, 0.65, 0.66, 0.67, 0.68, 0.69, 0.7]
+    # primitive_bravais_constants = [0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.5, 2.8, 3.1, 3.4, 3.8, 4.2, 4.6, 5.0, 5.5, 6.0, 6.4, 6.7, 7.0, 7.2, 7.4, 7.5, 7.6]
+    # Remove Logs dir to make sure we evaluate different models each time
+    print("\n----------------------------------REMOVING LOGS----------------------------------\n")
+    os.system("rm -rf logs")
+    # Remove datadir to generate with a new primitive_bravais_constant
+    print("\n----------------------------------REMOVING DATASET----------------------------------\n")
+    os.system("rm -rf dataset")
+    
+    task_loss_test_full = []
+    for constant in primitive_bravais_constants:
+        print(f"\n----------------------------------Running for Primitive Bravais Constant: {constant}----------------------------------\n")
+        for model in models:
+            test_loss_model = []
+            print(f"\n----------------------------------Running {model} Model----------------------------------\n")
+            run(model, constant)
+            [[test_energy_loss, test_force_loss], [test_energy_r2, test_force_r2]] = evaluate(model)
+            # Write task_loss_test to a file
+            with open(f"{model}_{constant}_test_evaluate.txt", "w") as f:
+                f.write(f"Primitive Bravais Constant: {constant}\n")
+                f.write(f"Test Energy Loss: {test_energy_loss}\n")
+                f.write(f"Test Force Loss: {test_force_loss}\n")
+                f.write(f"Test Energy R2: {test_energy_r2}\n")
+                f.write(f"Test Force R2: {test_force_r2}\n")
+            # Remove Logs dir to make sure we evaluate different models each time
+            print("\n----------------------------------REMOVING LOGS----------------------------------\n")
+            os.system("rm -rf logs")
+        # Remove datadir to generate with a new primitive_bravais_constant
+        print("\n----------------------------------REMOVING DATASET----------------------------------\n")
+        os.system("rm -rf dataset")
