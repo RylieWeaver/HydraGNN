@@ -30,56 +30,6 @@ def download_file(url, filename):
             file.write(data)
 
 # Function to convert RDKit molecule to PyTorch Geometric Data object
-def mol_to_pyg_data_og(row, mol):
-    # Node features: atomic number, chirality
-    atom_features = []
-    atom_y = []
-    for atom in mol.GetAtoms():
-        atomic_number = atom.GetAtomicNum()
-        atomic_one_hot = F.one_hot(torch.tensor(atomic_number), num_classes=118)  # One-hot encode atomic number
-        chirality = int(atom.GetChiralTag())  # Chirality can be 0, 1, 2
-        chirality_one_hot = F.one_hot(torch.tensor(chirality), num_classes=3)  # One-hot encode chirality for target variable
-        atom_features.append(torch.cat([atomic_one_hot.float(), chirality_one_hot.float()]))
-        # atom_y.append(chirality_one_hot)
-
-    atom_features = torch.stack(atom_features)
-    # atom_y = torch.stack(atom_y)
-
-    # Edge index and edge features
-    edge_index = []
-    edge_features = []
-    for bond in mol.GetBonds():
-        i = bond.GetBeginAtomIdx()
-        j = bond.GetEndAtomIdx()
-        bond_type = bond.GetBondTypeAsDouble()  # 1.0 for SINGLE, 2.0 for DOUBLE, etc.
-        is_aromatic = int(bond.GetIsAromatic())  # 1 if aromatic, 0 otherwise
-        edge_index.append([i, j])
-        edge_index.append([j, i])  # Undirected graph
-        edge_features.append([bond_type, is_aromatic])
-        edge_features.append([bond_type, is_aromatic])  # Reverse edge
-
-    edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
-    edge_features = torch.tensor(edge_features, dtype=torch.float)
-
-    # 3D positions
-    if mol.GetNumConformers() > 0:
-        conf = mol.GetConformer()
-        positions = []
-        for atom_idx in range(mol.GetNumAtoms()):
-            pos = conf.GetAtomPosition(atom_idx)
-            positions.append([pos.x, pos.y, pos.z])
-        pos = torch.tensor(positions, dtype=torch.float)
-    else:
-        pos = None
-
-    # Create PyTorch Geometric Data object
-    data = Data(x=atom_features, edge_index=edge_index, edge_attr=edge_features, pos=pos)
-    data.y = torch.tensor(row['top_score'], dtype=torch.float).unsqueeze(0)  # Target label
-    data = process_data(data)
-    
-    return data
-
-# Function to convert RDKit molecule to PyTorch Geometric Data object
 def mol_to_pyg_data(row, mol):
     # Ensure stereochemistry is assigned
     Chem.AssignStereochemistry(mol, force=True, cleanIt=True)
@@ -90,9 +40,12 @@ def mol_to_pyg_data(row, mol):
         atomic_number = atom.GetAtomicNum()
         atomic_one_hot = F.one_hot(torch.tensor(atomic_number), num_classes=118).float()  # One-hot encode atomic number
         
-        # Get chirality
-        chirality_tag = atom.GetChiralTag()
-        chirality = int(chirality_tag)  # Chirality can be 0 (CHI_UNSPECIFIED), 1 (CHI_TETRAHEDRAL_CW), 2 (CHI_TETRAHEDRAL_CCW)
+        # # Local Winding
+        # chirality_tag = atom.GetChiralTag()
+        # chirality = int(chirality_tag)  # Chirality can be 0 (CHI_UNSPECIFIED), 1 (CHI_TETRAHEDRAL_CW), 2 (CHI_TETRAHEDRAL_CCW)
+        # CIP Chirality Tag
+        cip_tag = atom.GetProp('_CIPCode') if atom.HasProp('_CIPCode') else '0'  # 'R', 'S', or '0' if not chiral
+        chirality = 1 if cip_tag == 'R' else (2 if cip_tag == 'S' else 0)
         chirality_one_hot = F.one_hot(torch.tensor(chirality), num_classes=3).float()  # One-hot encode chirality
         
         # Get CIP code and rank if available
@@ -229,9 +182,9 @@ def process_data(data):
     data.y = data.y.squeeze(0)
     return data
 
-# # Download datasets
-# for split, url in urls.items():
-#     download_file(url, f'{dataset_dir}/{split}.pickle')
+# Download datasets
+for split, url in urls.items():
+    download_file(url, f'{dataset_dir}/{split}.pickle')
 
 # Process and save datasets
 for split in ['train', 'val', 'test']:

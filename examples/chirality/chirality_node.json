@@ -28,13 +28,15 @@
         "num_after_skip": 1,
         "envelope_exponent": 5,
         "num_radial": 5,
+        "max_ell": 1,
+        "node_max_ell": 1,
         "input_dim": 118,
-        "hidden_dim": 48,
-        "num_conv_layers": 2,
+        "hidden_dim": 16,
+        "num_conv_layers": 4,
         "output_heads": {
           "node": {
             "num_headlayers": 2,
-            "dim_headlayers": [40,20],
+            "dim_headlayers": [20,10],
             "type": "mlp"
           }
         },
@@ -55,7 +57,7 @@
         "early_stopping": true,
         "Optimizer": {
           "type": "Adam",
-          "learning_rate": 0.001
+          "learning_rate": 0.01
         },
         "conv_checkpointing": false
       }

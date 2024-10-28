@@ -159,7 +159,7 @@ class CHIRALStack(Base):
         predictions = torch.argmax(pred[0], dim=1)
         # Calculate accuracy for each class
         class_accuracies = []
-        if torch.rand(1) < 0.09:  # Print only 1% of the time
+        if torch.rand(1) < 0.99:  # Print only 1% of the time
             for i in range(3):  # Assuming 3 classes
                 mask = (value == i)  # Identify samples of class 'i'
                 if mask.sum() > 0:  # Avoid division by zero
@@ -180,86 +180,6 @@ class CHIRALStack(Base):
         loss = F.l1_loss(pred_tensor, value)
     
         return loss, [loss]
-
-    def _multihead(self):
-        ############multiple heads/taks################
-        # shared dense layers for heads with graph level output
-        dim_sharedlayers = 0
-        if "graph" in self.config_heads:
-            denselayers = []
-            dim_sharedlayers = self.config_heads["graph"]["dim_sharedlayers"]
-            denselayers.append(nn.Linear(self.hidden_dim, dim_sharedlayers))
-            denselayers.append(self.activation_function)
-            for ishare in range(self.config_heads["graph"]["num_sharedlayers"] - 1):
-                denselayers.append(nn.Linear(dim_sharedlayers, dim_sharedlayers))
-                denselayers.append(self.activation_function)
-            self.graph_shared = nn.Sequential(*denselayers)
-
-        if "node" in self.config_heads:
-            self.num_conv_layers_node = self.config_heads["node"]["num_headlayers"]
-            self.hidden_dim_node = self.config_heads["node"]["dim_headlayers"]
-            self._init_node_conv()
-
-        inode_feature = 0
-        for ihead in range(self.num_heads):
-            # mlp for each head output
-            if self.head_type[ihead] == "graph":
-                num_head_hidden = self.config_heads["graph"]["num_headlayers"]
-                dim_head_hidden = self.config_heads["graph"]["dim_headlayers"]
-                denselayers = []
-                denselayers.append(nn.Linear(dim_sharedlayers, dim_head_hidden[0]))
-                denselayers.append(self.activation_function)
-                for ilayer in range(num_head_hidden - 1):
-                    denselayers.append(
-                        nn.Linear(dim_head_hidden[ilayer], dim_head_hidden[ilayer + 1])
-                    )
-                    denselayers.append(self.activation_function)
-                denselayers.append(
-                    nn.Linear(
-                        dim_head_hidden[-1],
-                        self.head_dims[ihead] * (1 + self.var_output),
-                    )
-                )
-                head_NN = nn.Sequential(*denselayers)
-            elif self.head_type[ihead] == "node":
-                self.node_NN_type = self.config_heads["node"]["type"]
-                head_NN = nn.ModuleList()
-                if self.node_NN_type == "mlp" or self.node_NN_type == "mlp_per_node":
-                    self.num_mlp = 1 if self.node_NN_type == "mlp" else self.num_nodes
-                    assert (
-                        self.num_nodes is not None
-                    ), "num_nodes must be positive integer for MLP"
-                    # """if different graphs in the dataset have different size, one MLP is shared across all nodes """
-                    head_NN = MLPNode(
-                        self.hidden_dim,
-                        self.head_dims[ihead] * (1 + self.var_output),
-                        self.num_mlp,
-                        self.hidden_dim_node,
-                        self.config_heads["node"]["type"],
-                        self.activation_function,
-                    )
-                elif self.node_NN_type == "conv":
-                    for conv, batch_norm in zip(
-                        self.convs_node_hidden, self.batch_norms_node_hidden
-                    ):
-                        head_NN.append(conv)
-                        head_NN.append(batch_norm)
-                    head_NN.append(self.convs_node_output[inode_feature])
-                    head_NN.append(self.batch_norms_node_output[inode_feature])
-                    inode_feature += 1
-                else:
-                    raise ValueError(
-                        "Unknown head NN structure for node features"
-                        + self.node_NN_type
-                        + "; currently only support 'mlp', 'mlp_per_node' or 'conv' (can be set with config['NeuralNetwork']['Architecture']['output_heads']['node']['type'], e.g., ./examples/ci_multihead.json)"
-                    )
-            else:
-                raise ValueError(
-                    "Unknown head type"
-                    + self.head_type[ihead]
-                    + "; currently only support 'graph' or 'node'"
-                )
-            self.heads_NN.append(head_NN)
 
     def _conv_args(self, data):
         assert (
@@ -294,21 +214,26 @@ class CHIRALStack(Base):
                 continue
             if torch.argmax(data.x[base_node_id][:118]) != 6:
                 continue
+                    
             
-            # # NOTE METHOD 1
-            # # Get ordering from priority of neighbors
-            # edge_priority = data.edge_priority[data.edge_index[0] == base_node_id]
-            # highest_to_lowest_indices = torch.argsort(edge_priority, descending=True)
-            # ordered_neighbors = neighbors[highest_to_lowest_indices]
-            # # Take out the highest index three neighbors
-            # top_three_neighbors = ordered_neighbors[:3]
-            # ordered_triplet = top_three_neighbors.tolist()
-            # triplet_full = [base_node_id] + ordered_triplet
-            # triplet_index.append(triplet_full)
-            # # Check stp
-            # rel1 = data.pos[base_node_id] - data.pos[ordered_triplet[0]]
-            # rel2 = data.pos[base_node_id] - data.pos[ordered_triplet[1]]
-            # rel3 = data.pos[base_node_id] - data.pos[ordered_triplet[2]]
+            # Get ordering from priority of neighbors
+            edge_priority = data.edge_priority[data.edge_index[0] == base_node_id]
+            highest_to_lowest_indices = torch.argsort(edge_priority, descending=True)
+            ordered_neighbors = neighbors[highest_to_lowest_indices]
+            # Separate the neighbors
+            top_three_neighbors = ordered_neighbors[:3]
+            low_neighbor = ordered_neighbors[3]
+            ordered_triplet = top_three_neighbors.tolist()
+            triplet_full = [base_node_id] + ordered_triplet
+            triplet_index.append(triplet_full)
+            
+            # Check stp
+            # rel1 = data.pos[base_node_id] - data.pos[low_neighbor]
+            # rel2 = data.pos[ordered_triplet[0]] - data.pos[ordered_triplet[1]]
+            # rel3 = data.pos[ordered_triplet[1]] - data.pos[ordered_triplet[2]]
+            # # Make rel2 and rel3 orthogonal to rel1 by taking out that part
+            # # rel2 = rel2 - torch.dot(rel2, rel1) * rel1 / torch.dot(rel1, rel1)
+            # # rel3 = rel3 - torch.dot(rel3, rel1) * rel1 / torch.dot(rel1, rel1)
             # stp = torch.dot(rel1, torch.linalg.cross(rel2, rel3))
             # chiral_tag = data.y[3*base_node_id:3*(base_node_id+1)].squeeze().tolist()
             # if chiral_tag == [0,1,0]:
@@ -321,38 +246,6 @@ class CHIRALStack(Base):
             #         print("Consistent STP")
             #     else:
             #         print("Inconsistent STP")
-                    
-            
-            # NOTE METHOD 2
-            # Get ordering from priority of neighbors
-            edge_priority = data.edge_priority[data.edge_index[0] == base_node_id]
-            highest_to_lowest_indices = torch.argsort(edge_priority, descending=True)
-            ordered_neighbors = neighbors[highest_to_lowest_indices]
-            # Separate the neighbors
-            top_three_neighbors = ordered_neighbors[:3]
-            low_neighbor = ordered_neighbors[3]
-            ordered_triplet = top_three_neighbors.tolist()
-            triplet_full = [base_node_id] + ordered_triplet
-            triplet_index.append(triplet_full)
-            # Check stp
-            rel1 = data.pos[base_node_id] - data.pos[low_neighbor]
-            rel2 = data.pos[ordered_triplet[0]] - data.pos[ordered_triplet[1]]
-            rel3 = data.pos[ordered_triplet[1]] - data.pos[ordered_triplet[2]]
-            # Make rel2 and rel3 orthogonal to rel1 by taking out that part
-            # rel2 = rel2 - torch.dot(rel2, rel1) * rel1 / torch.dot(rel1, rel1)
-            # rel3 = rel3 - torch.dot(rel3, rel1) * rel1 / torch.dot(rel1, rel1)
-            stp = torch.dot(rel1, torch.linalg.cross(rel2, rel3))
-            chiral_tag = data.y[3*base_node_id:3*(base_node_id+1)].squeeze().tolist()
-            if chiral_tag == [0,1,0]:
-                if stp < 0:
-                    print("Consistent STP")
-                else:
-                    print("Inconsistent STP")
-            elif chiral_tag == [0,0,1]:
-                if stp > 0:
-                    print("Consistent STP")
-                else:
-                    print("Inconsistent STP")
             
             
             # # Generate all possible triplets of neighbors
@@ -402,28 +295,20 @@ class ChiralMessage(torch.nn.Module):
         activation1 = nn.SiLU()
         activation2 = nn.SiLU()
         
-        self.scalar_gate = nn.Sequential(torch.nn.Linear(2*node_size, node_size), activation1, torch.nn.Linear(node_size, 4*node_size))
+        self.scalar_gate = nn.Sequential(torch.nn.Linear(2*node_size, node_size), activation1, torch.nn.Linear(node_size, 3*node_size))
         self.chiral_edge_gate = nn.Sequential(torch.nn.Linear(node_size, node_size), activation1, torch.nn.Linear(node_size, node_size))
         self.chiral_vector_gate = nn.Sequential(torch.nn.Linear(2*node_size, node_size), activation1, torch.nn.Linear(node_size, node_size))
         self.update_V = nn.Linear(node_size, node_size)
         self.scalar_vector_gate = nn.Sequential(torch.nn.Linear(node_size, node_size), activation1, torch.nn.Linear(node_size, node_size))
-        self.embed_chiral = nn.Sequential(nn.Linear(2*node_size, node_size), activation1, nn.Linear(node_size, node_size))
+        
         self.embed_chiral_edge = nn.Sequential(nn.Linear(node_size, node_size), activation1)
-        # , nn.Linear(node_size, node_size)
         self.embed_chiral_vector = nn.Sequential(nn.Linear(node_size, node_size), activation1, nn.Linear(node_size, node_size))
-        self.embed_chiral_message = nn.Sequential(nn.Linear(2*node_size, node_size), activation1, nn.Linear(node_size, node_size))
         
-        self.scalar_filter_layer = nn.Linear(num_radial, 4*node_size)
-        self.chiral_edge_filter_layer = nn.Linear(num_radial, 1)
-        self.chiral_vector_filter_layer = nn.Linear(num_radial, 1)
-        self.chiral_vector_filter = nn.Sequential(nn.Linear(node_size, node_size), activation2, nn.Linear(node_size, 64))
-        
-        self.chiral_env_embedding = nn.Sequential(nn.Linear(3*node_size, node_size), activation1, nn.Linear(node_size, node_size))
-        self.chiral_edge_env_filter = nn.Sequential(nn.Linear(2*node_size, node_size), activation1, nn.Linear(node_size, 1))
-        self.chiral_vector_env_filter = nn.Sequential(nn.Linear(2*node_size, node_size), activation1, nn.Linear(node_size, 1))
+        self.scalar_filter_layer = nn.Linear(num_radial, 3*node_size)
+        # self.chiral_edge_filter_layer = nn.Linear(num_radial, 1)
+        # self.chiral_vector_filter_layer = nn.Linear(num_radial, 1)
         
         self.scalar_update = nn.Sequential(nn.Linear(node_size, node_size), activation2, nn.Linear(node_size, node_size))
-        self.chiral_update = nn.Sequential(nn.Linear(node_size, node_size), activation2, nn.Linear(node_size, node_size))
         
     def forward(self, node_scalar, node_chiral, node_vector, edge_index, edge_diff, edge_dist, triplet_index, pos):
         """Scalar / Vector Section"""
@@ -431,15 +316,15 @@ class ChiralMessage(torch.nn.Module):
         message_gate = self.scalar_gate(torch.cat((node_scalar[edge_index[:, 0]], node_scalar[edge_index[:, 1]]), dim=1))  # Shape: [num_edges, 2 * node_size]  -->  [num_edges, 4 * node_size]
         scalar_filter_weight = self.scalar_filter_layer(sinc_expansion(edge_dist, self.num_radial, self.cutoff)) * cosine_cutoff(edge_dist, self.cutoff).unsqueeze(-1)
         message_gate = message_gate * scalar_filter_weight
-        gate_vv, gate_ev, messages_ss, env_chiral = torch.split(
+        gate_vv, gate_ev, messages_ss = torch.split(
             message_gate,
             self.node_size,
             dim=1,
         ) # Each Shape: [num_edges, node_size]
         
         # Apply softmax to vector gates
-        gate_vv = torch.softmax(gate_vv, dim=1)
-        gate_ev = torch.softmax(gate_ev, dim=1)
+        # gate_vv = torch.softmax(gate_vv, dim=1)
+        # gate_ev = torch.softmax(gate_ev, dim=1)
         
         # Make neighbor messages
         messages_vv = gate_vv.unsqueeze(1) * node_vector[edge_index[:, 1]]  # Shape: [num_edges, 3, node_size]
@@ -450,18 +335,12 @@ class ChiralMessage(torch.nn.Module):
         message_ss = torch_scatter.scatter(messages_ss, edge_index[:, 0], dim=0, dim_size=node_scalar.size(0), reduce="sum")
         message_vv = torch_scatter.scatter(messages_vv, edge_index[:, 0], dim=0, dim_size=node_vector.size(0), reduce="sum")
         message_ev = torch_scatter.scatter(messages_ev, edge_index[:, 0], dim=0, dim_size=node_vector.size(0), reduce="sum")
-        env_chiral1 = torch_scatter.scatter(env_chiral, edge_index[:, 0], dim=0, dim_size=node_chiral.size(0), reduce="sum")
-        env_chiral2 = torch_scatter.scatter(env_chiral, edge_index[:, 0], dim=0, dim_size=node_chiral.size(0), reduce="max")
-        env_chiral3 = torch_scatter.scatter(env_chiral, edge_index[:, 0], dim=0, dim_size=node_chiral.size(0), reduce="min")
-        env_chiral = torch.cat((env_chiral1, env_chiral2, env_chiral3), dim=1)
-        env_chiral = self.chiral_env_embedding(env_chiral)
 
         # Self Cross-Message
         Vv = self.update_V(node_vector)
         Vv_norm = torch.linalg.norm(Vv, dim=1)
         gate_vs = self.scalar_vector_gate(node_scalar)
         message_vs = gate_vs * Vv_norm
-        # message_vs = torch.zeros_like(node_scalar).to(node_scalar.device)
         """"""
         
         """Chiral Section"""
@@ -474,25 +353,9 @@ class ChiralMessage(torch.nn.Module):
             
             # Compute chiral edge and vector scalar messages
             ## Edge
-            # chiral_edge_t1 = self.chiral_edge_gate(node_scalar[triplet1])  # Shape: [num_triplets, node_size]
-            # chiral_edge_t2 = self.chiral_edge_gate(node_scalar[triplet2])  # Shape: [num_triplets, node_size]
-            # chiral_edge_t3 = self.chiral_edge_gate(node_scalar[triplet3])  # Shape: [num_triplets, node_size]
-            # stacked = torch.stack((chiral_edge_t1, chiral_edge_t2, chiral_edge_t3), dim=0)  # Shape: [3, num_triplets, node_size]
-            # chiral_edge = self.embed_chiral_edge(torch.sum(stacked, dim=0))         # Shape: [num_triplets, node_size]
             chiral_edge = self.embed_chiral_edge(node_scalar[base_nodes] + node_scalar[triplet1] + node_scalar[triplet2] + node_scalar[triplet3])
-            # ## Vector
-            # # chiral_vector_t1 = self.chiral_vector_gate(torch.cat((node_scalar[base_nodes], node_scalar[triplet1]), dim=1))  # Shape: [num_triplets, node_size]
-            # # chiral_vector_t2 = self.chiral_vector_gate(torch.cat((node_scalar[base_nodes], node_scalar[triplet2]), dim=1))  # Shape: [num_triplets, node_size]
-            # # chiral_vector_t3 = self.chiral_vector_gate(torch.cat((node_scalar[base_nodes], node_scalar[triplet3]), dim=1))  # Shape: [num_triplets, node_size]
-            # # chiral_vector = torch.mean(torch.stack((chiral_vector_t1, chiral_vector_t2, chiral_vector_t3)), dim=0)  # Shape: [num_triplets, node_size]
+            ## Vector
             chiral_vector = self.embed_chiral_vector(node_scalar[base_nodes] + node_scalar[triplet1] + node_scalar[triplet2] + node_scalar[triplet3])
-            # # chiral_vector_filter = torch.softmax((self.chiral_vector_filter(node_scalar[triplet1] + node_scalar[triplet2] + node_scalar[triplet3])), dim=1)
-            chiral_vector_filter = self.chiral_vector_filter(node_scalar[triplet1] + node_scalar[triplet2] + node_scalar[triplet3])
-            # # chiral_vector_filter = torch.ones(chiral_vector.shape[0], 64, device=chiral_vector.device)
-            
-            chiral_environment = env_chiral[base_nodes]
-            chiral_edge_env = self.chiral_edge_env_filter(torch.cat((chiral_environment, chiral_edge), dim=1))
-            chiral_vector_env = self.chiral_vector_env_filter(torch.cat((chiral_environment, chiral_vector), dim=1))
             
             # Calculate scalar triple products for each triplet in Edge and Vector
             ## Edge
@@ -504,12 +367,10 @@ class ChiralMessage(torch.nn.Module):
                 'bi,bi->b', edge_rel_pos1, torch.cross(edge_rel_pos2, edge_rel_pos3, dim=1)
             )  # Shape: [num_triplets]
             ### Message
-            edge_triple_product_mag = torch.abs(edge_triple_products) + 1e-3
-            chiral_edge_filter_weight = self.chiral_edge_filter_layer(sinc_expansion(edge_triple_product_mag, self.num_radial, self.cutoff**3)) * cosine_cutoff(edge_triple_product_mag, self.cutoff**3).unsqueeze(-1)
-            messages_edge_chiral = chiral_edge * chiral_edge_filter_weight
-            messages_edge_chiral = chiral_edge * chiral_edge_env
-            # messages_edge_chiral = chiral_edge
-            messages_edge_chiral = messages_edge_chiral * torch.sign(edge_triple_products.unsqueeze(-1))  # Shape: [num_triplets, node_size]
+            chiral_edge_filter = (1 / (torch.abs(edge_triple_products) + 1e-1) * torch.sign(edge_triple_products)).unsqueeze(-1)  # Shape: [num_triplets]
+            # chiral_edge_filter = torch.sign(edge_triple_products).unsqueeze(-1)  # Shape: [num_triplets]
+            messages_edge_chiral = chiral_edge
+            messages_edge_chiral = messages_edge_chiral * chiral_edge_filter  # Shape: [num_triplets, node_size]
             message_chiral_edge = torch_scatter.scatter(
                 messages_edge_chiral,
                 base_nodes,  # Automatically sets zero if base_node not in triplet_index
@@ -519,15 +380,14 @@ class ChiralMessage(torch.nn.Module):
             )  # Shape: [num_nodes, node_size]
       
             
-            
             # Vector
             ## Initialize the aggregated chiral vector messages
             message_chiral_vector_total = torch.zeros_like(node_chiral).to(node_chiral.device)
             messages_list = []
             ## Iterate over the v indices (0, 1, 2, etc...)
-            for dim1 in range(4):
-                for dim2 in range(4):
-                    for dim3 in range(4):
+            for dim1 in range(3):
+                for dim2 in range(3):
+                    for dim3 in range(3):
                         ### Scalar Triple Product
                         vec_rel_pos1 = pos[base_nodes] - pos[triplet1] + node_vector[triplet1, :, dim1]  # Shape: [num_triplets, 3]
                         vec_rel_pos2 = pos[base_nodes] - pos[triplet2] + node_vector[triplet2, :, dim2]  # Shape: [num_triplets, 3]
@@ -540,24 +400,15 @@ class ChiralMessage(torch.nn.Module):
                         )  # Shape: [num_triplets]
                         
                         ### Message
-                        vector_triple_product_mag = 1 / (torch.abs(vector_triple_products) + 1e-2)  # Shape: [num_triplets]
-                        chiral_vector_filter_weight = (
-                            self.chiral_vector_filter_layer(
-                                sinc_expansion(vector_triple_product_mag, self.num_radial, 100)
-                            ) * cosine_cutoff(vector_triple_product_mag, 100).unsqueeze(-1)
-                        )  # Shape: [num_triplets, node_size]
-                        chiral_vector_filter_weight = (torch.abs(vector_triple_products) + 1e-2).unsqueeze(-1)  # Shape: [num_triplets, 1]
-                        
-                        # messages_vector_chiral = chiral_vector * (vector_triple_products).unsqueeze(-1)  # Shape: [num_triplets, node_size]
-                        messages_vector_chiral = chiral_vector * chiral_vector_filter_weight  # Shape: [num_triplets, node_size]
-                        messages_vector_chiral = chiral_vector * torch.sign(vector_triple_products).unsqueeze(-1)  # Shape: [num_triplets, 3]
+                        chiral_vector_filter = ((torch.abs(vector_triple_products) + 1e-1) * torch.sign(vector_triple_products)).unsqueeze(-1)  # Shape: [num_triplets, 1]
+                        # chiral_vector_filter = torch.sign(vector_triple_products).unsqueeze(-1)  # Shape: [num_triplets, 1]
+                        messages_vector_chiral = chiral_vector
+                        messages_edge_chiral = messages_edge_chiral * chiral_vector_filter  # Shape: [num_triplets, node_size]
                         messages_list.append(messages_vector_chiral)
             
             messages_vector_chiral_stacked = torch.stack(messages_list, dim=-1)  # Shape: [num_triplets, node_size, 64]
-            messages_vector_chiral_filtered = messages_vector_chiral_stacked * chiral_vector_filter.unsqueeze(1)  # Shape: [num_triplets, node_size, 64]
-            # messages_vector_chiral_filtered = messages_vector_chiral_stacked
-            messages_vector_chiral_total = messages_vector_chiral_filtered.mean(dim=-1).squeeze(-1)  # Shape: [num_triplets, node_size]
-            messages_vector_chiral_total = messages_vector_chiral_total * chiral_vector_env
+            messages_vector_chiral_total = messages_vector_chiral_stacked.mean(dim=-1).squeeze(-1)  # Shape: [num_triplets, node_size]
+            messages_vector_chiral_total = messages_vector_chiral_total
             # Aggregate the messages for the current dimension
             message_vector_chiral_total = torch_scatter.scatter(
                 messages_vector_chiral_total,
@@ -569,16 +420,12 @@ class ChiralMessage(torch.nn.Module):
             
             # Final Message
             message_chiral = message_chiral_edge + message_vector_chiral_total
-            # message_chiral = message_chiral_edge
-            # message_chiral = self.embed_chiral(torch.cat((node_scalar, message_chiral), dim=1))
         else:
             # If there are no triplets, initialize chiral messages to zero
             message_chiral = torch.zeros_like(node_chiral).to(node_chiral.device)
-        # message_chiral = torch.zeros_like(node_chiral).to(node_chiral.device)
         """"""
         
         return (self.scalar_update(node_scalar + message_vs + message_ss)), (node_chiral + message_chiral), (node_vector + message_vv + message_ev)
-        # return node_scalar, self.chiral_update(node_chiral + message_chiral), node_vector
 
 
 class ChiralUpdate(torch.nn.Module):
@@ -588,22 +435,11 @@ class ChiralUpdate(torch.nn.Module):
         self.node_size = node_size
         activation = nn.SiLU()
         
-        self.update_node = nn.Sequential(nn.Linear(node_size, node_size), activation)
-        # , nn.Linear(node_size, node_size),
+        # self.update_node = nn.Sequential(nn.Linear(node_size, node_size), activation)
 
     def forward(self, node_scalar, node_chiral):
-        return self.update_node(node_scalar + node_chiral)
-        # return node_chiral
-
-
-def check_increasing(indices):
-    # Find minimum point
-    pivot = torch.argmin(indices)
-    # Check along after pivot point
-    for i in range(len(indices)-1):
-        if indices[(pivot + i) % 3] > indices[(pivot + i + 1) % 3]:
-            return False
-    return True
+        # return self.update_node(node_scalar + node_chiral)
+        return node_scalar + node_chiral
 
 
 class MLPNode(nn.Module):

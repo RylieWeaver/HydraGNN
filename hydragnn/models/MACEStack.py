@@ -32,6 +32,7 @@ import warnings
 
 # Torch
 import torch
+import torch.nn.functional as F
 from torch.nn import ModuleList, Sequential
 from torch.utils.checkpoint import checkpoint
 from torch_scatter import scatter
@@ -246,7 +247,8 @@ class MACEStack(Base):
         ## Input, Hidden, and Output irreps sizing (this is usually just hidden in MACE)
         ### Input dimensions are handled implicitly
         ### Hidden
-        hidden_irreps = create_irreps_string(hidden_dim, self.node_max_ell)
+        # hidden_irreps = create_irreps_string(hidden_dim, self.node_max_ell)
+        hidden_irreps = "24x0e+24x0o+24x1e+24x1o"
         hidden_irreps = o3.Irreps(hidden_irreps)
         node_feats_irreps = o3.Irreps([(hidden_irreps.count(o3.Irrep(0, 1)), (0, 1))])
         num_features = hidden_irreps.count(
@@ -266,7 +268,7 @@ class MACEStack(Base):
             hidden_irreps_out = hidden_irreps
             inter = self.interaction_cls_first(
                 node_attrs_irreps=self.node_attr_irreps,
-                node_feats_irreps=node_feats_irreps,
+                node_feats_irreps=o3.Irreps("48x0e"),
                 edge_attrs_irreps=self.edge_attrs_irreps,
                 edge_feats_irreps=self.edge_feats_irreps,
                 target_irreps=interaction_irreps,  # Replace with output?
@@ -421,7 +423,8 @@ class MACEStack(Base):
         # Create node_attrs from atomic numbers. Later on it may contain more information
         ## Node attrs are intrinsic properties of the atoms. Currently, MACE only supports atomic number node attributes
         ## data.node_attrs is already used in another place, so has been renamed to data.node_attributes from MACE and same with other data variable names
-        data.node_attributes = process_node_attributes(data["x"], self.num_elements)
+        # data.node_attributes = process_node_attributes(data["x"], self.num_elements)
+        data.node_attributes = data.x
         data.shifts = torch.zeros(
             (data.edge_index.shape[1], 3), dtype=data.pos.dtype, device=data.pos.device
         )  # Shifts takes into account pbc conditions, but I believe we already generate data.pos to take it into account
@@ -453,6 +456,35 @@ class MACEStack(Base):
         }
 
         return data, conv_args
+    
+    def loss(useless1, pred, value, useless2):
+        # Reshape 'value' to [num_nodes, 3] where each row is a one-hot encoding of the class
+        value = value.view(-1, 3)
+
+        # Convert the one-hot encoding into class indices using argmax
+        value = torch.argmax(value, dim=1).long()
+
+        # Apply cross-entropy loss
+        # 'pred[0]' should have shape [num_nodes, num_classes] and 'value' should have shape [num_nodes]
+        # class_weights = torch.tensor([0.1, 50.0, 50.0]).to('cuda:0')  # Adjust the weights based on the class distribution
+        class_weights = torch.tensor([0.1, 50.0, 50.0])
+        loss = F.cross_entropy(pred[0], value, weight=class_weights)
+       
+        # Calculate overall predictions
+        predictions = torch.argmax(pred[0], dim=1)
+        # Calculate accuracy for each class
+        class_accuracies = []
+        if torch.rand(1) < 0.09:  # Print only 1% of the time
+            for i in range(3):  # Assuming 3 classes
+                mask = (value == i)  # Identify samples of class 'i'
+                if mask.sum() > 0:  # Avoid division by zero
+                    accuracy = (predictions[mask] == value[mask]).float().mean()
+                else:
+                    accuracy = torch.tensor(0.0, device=pred[0].device)  # If no samples for this class, accuracy is 0
+                class_accuracies.append(accuracy)
+                print(f"Accuracy for class {i}: {accuracy.item()}")
+
+        return loss, [loss]
 
     def _multihead(self):
         # NOTE Multihead is skipped as it's an integral part of MACE's architecture to have a decoder after every layer,
@@ -694,6 +726,42 @@ class MLPNode(torch.nn.Module):
                         irreps_in=hidden_irreps, acts=[self.activation_function]
                     )
                 )
+            
+            # # Input and hidden irreps for each MLP layer
+            # input_irreps = input_irreps
+            # hidden_irreps = o3.Irreps(f"{hidden_dims[0] // 4}x0e + {hidden_dims[0] // 4}x0o + {hidden_dims[0] // 4}x1e + {hidden_dims[0] // 4}x1o")  # Hidden irreps
+            
+            # # Add first layer
+            # denselayers.append(o3.Linear(input_irreps, hidden_irreps))
+            # denselayers.append(
+            #     nn.Activation(
+            #         irreps_in=hidden_irreps, 
+            #         acts=[
+            #             self.activation_function,  # For 0e (scalar)
+            #             torch.abs,  # For 0o (pseudoscalar)
+            #             None,       # For 1e (vector)
+            #             None        # For 1o (pseudovector)
+            #         ]
+            #     )
+            # )
+
+            # # Add intermediate layers
+            # for ilayer in range(self.num_layers - 1):
+            #     input_irreps = o3.Irreps(f"{hidden_dims[ilayer] // 4}x0e + {hidden_dims[ilayer] // 4}x0o + {hidden_dims[ilayer] // 4}x1e + {hidden_dims[ilayer] // 4}x1o")
+            #     hidden_irreps = o3.Irreps(f"{hidden_dims[ilayer + 1] // 4}x0e + {hidden_dims[ilayer + 1] // 4}x0o + {hidden_dims[ilayer + 1] // 4}x1e + {hidden_dims[ilayer + 1] // 4}x1o")
+                
+            #     denselayers.append(o3.Linear(input_irreps, hidden_irreps))
+            #     denselayers.append(
+            #         nn.Activation(
+            #             irreps_in=hidden_irreps,
+            #             acts=[
+            #                 self.activation_function,  # For 0e (scalar)
+            #                 torch.abs,  # For 0o (pseudoscalar)
+            #                 None,       # For 1e (vector)
+            #                 None        # For 1o (pseudovector)
+            #             ]
+            #         )
+            #     )
 
             # Last layer
             hidden_irreps = o3.Irreps(f"{hidden_dims[-1]}x0e")
@@ -701,6 +769,7 @@ class MLPNode(torch.nn.Module):
                 f"{self.output_dim}x0e"
             )  # Assuming head_dims has been passed for the final output
             denselayers.append(o3.Linear(hidden_irreps, output_irreps))
+            denselayers.append(torch.nn.Softmax(dim=1))  # New Line for classification task of chirality
 
             # Append to MLP
             self.mlp.append(Sequential(*denselayers))
@@ -739,3 +808,9 @@ class MLPNode(torch.nn.Module):
 
     def __str__(self):
         return "MLPNode"
+
+
+
+    
+
+   

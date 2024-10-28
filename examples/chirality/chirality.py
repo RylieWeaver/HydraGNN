@@ -46,13 +46,13 @@ def load_dataset(split):
     return torch.load(os.path.join(dataset_dir, f'{split}.pt'))
 
 # Load train, val, and test datasets
-# train_data = load_dataset('train')
-# val_data = load_dataset('val')
-# test_data = load_dataset('test')
+train_data = load_dataset('train')
+val_data = load_dataset('val')
+test_data = load_dataset('test')
 
 # Combine the datasets into one list
-# dataset = train_data + val_data + test_data
-dataset = torch.load('./chiral_tetrahedron_dataset_with_positions_and_triples.pt')
+dataset = train_data + val_data + test_data
+# dataset = torch.load('./chiral_tetrahedron_dataset_with_positions_and_triples.pt')
 # dataset = dataset[:3000]
 train, val, test = hydragnn.preprocess.split_dataset(
     dataset, config["NeuralNetwork"]["Training"]["perc_train"], False
