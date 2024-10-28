@@ -5,7 +5,7 @@
   "Dataset": {
     "name": "LJdataset",
     "format": "XYZ",
-    "number_configurations": 1000,
+    "number_configurations": 10000,
     "node_features": {
       "name": ["atom_type"],
       "dim": [1],
@@ -33,12 +33,12 @@
       "envelope_exponent": 5,
       "num_radial": 8,
       "num_spherical": 2,
-      "hidden_dim": 100,
+      "hidden_dim": 30,
       "num_conv_layers": 1,
       "output_heads": {
         "node": {
           "num_headlayers": 2,
-          "dim_headlayers": [40,20],
+          "dim_headlayers": [20,10],
           "type": "mlp"
         }
       },
@@ -56,7 +56,7 @@
       "output_names": ["graph_energy"]
     },
     "Training": {
-      "num_epoch": 75,
+      "num_epoch": 50,
       "batch_size": 32,
       "perc_train": 0.7,
       "patience": 20,

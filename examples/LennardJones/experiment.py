@@ -346,8 +346,8 @@ if __name__ == "__main__":
     # models = ["DimeNet", "PNAPlus", "PAINN", "MACE"]
     # primitive_bravais_constants = generate_logspace(0.1, 10, 5)
     models = ["DimeNet"]
-    # primitive_bravais_constants = [0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.6]
-    primitive_bravais_constants = [0.61, 0.62, 0.63, 0.64, 0.65, 0.66, 0.67, 0.68, 0.69, 0.7]
+    primitive_bravais_constants = [0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.6]
+    # primitive_bravais_constants = [0.61, 0.62, 0.63, 0.64, 0.65, 0.66, 0.67, 0.68, 0.69, 0.7]
     # primitive_bravais_constants = [0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.5, 2.8, 3.1, 3.4, 3.8, 4.2, 4.6, 5.0, 5.5, 6.0, 6.4, 6.7, 7.0, 7.2, 7.4, 7.5, 7.6]
     # Remove Logs dir to make sure we evaluate different models each time
     print("\n----------------------------------REMOVING LOGS----------------------------------\n")
