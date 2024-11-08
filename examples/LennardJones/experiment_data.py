@@ -165,9 +165,12 @@ class LJDataset(AbstractBaseDataset):
         forces = torch_data[:, [5, 6, 7]]
         forces_pre_scaling_factor = 1.0
         forces_pre_scaled = forces * forces_pre_scaling_factor
-        # Scaling
-        log_total_energy = torch.log(torch.tensor(total_energy).unsqueeze(0) + 1000.0)
-        forces_chain_rule = forces / (total_energy + 1000.0)
+        # Log Scaling
+        # total_energy = torch.tensor(total_energy).unsqueeze(0)
+        # forces = torch.tensor(forces)
+        # log_total_energy = torch.sign(total_energy) * torch.log(total_energy.abs() + 1.0)
+        # forces_chain_rule = forces / (total_energy.abs() + 1.0)
+        # Min-Max Scaling is done after full dataset creation
 
         data = Data(
             supercell_size=torch_supercell.to(torch.float32),
@@ -176,8 +179,8 @@ class LJDataset(AbstractBaseDataset):
             forces_pre_scaling_factor=torch.tensor(forces_pre_scaling_factor).to(
                 torch.float32
             ),
-            # forces=forces,
-            forces=forces_chain_rule,
+            forces=forces,
+            # forces=forces_chain_rule,
             forces_pre_scaled=forces_pre_scaled,
             pos=torch_data[:, [1, 2, 3]].to(torch.float32),
             x=torch.cat([torch_data[:, [0, 4]]], axis=1).to(torch.float32),
@@ -185,8 +188,8 @@ class LJDataset(AbstractBaseDataset):
             energy_per_atom=torch.tensor(energy_per_atom_pretransformed)
             .unsqueeze(0)
             .to(torch.float32),
-            # energy=torch.tensor(total_energy).unsqueeze(0).to(torch.float32),
-            energy=torch.tensor(log_total_energy).to(torch.float32),
+            energy=torch.tensor(total_energy).unsqueeze(0).to(torch.float32),
+            # energy=torch.tensor(log_total_energy).to(torch.float32),
         )
 
         # Create pbc edges and lengths

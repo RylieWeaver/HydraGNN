@@ -184,11 +184,15 @@ def evaluate(modeltype):
     variable_index = 0
     # for output_name, output_type, output_dim in zip(config["NeuralNetwork"]["Variables_of_interest"]["output_names"], config["NeuralNetwork"]["Variables_of_interest"]["type"], config["NeuralNetwork"]["Variables_of_interest"]["output_dim"]):
 
+    # Global variables
     num_samples = len(testset)
-    energy_true_list = []
-    energy_pred_list = []
-    forces_true_list = []
-    forces_pred_list = []
+    energy_min = testset.energy_min
+    energy_max = testset.energy_max
+    
+    energy_true_all = torch.empty(0, device=get_device())
+    energy_pred_all = torch.empty(0, device=get_device())
+    forces_true_all = torch.empty(0, 3, device=get_device())  # Assuming forces are 3D vectors
+    forces_pred_all = torch.empty(0, 3, device=get_device())
 
     for data_id, data in enumerate(tqdm(testset)):
         data.pos.requires_grad = True
@@ -205,55 +209,93 @@ def evaluate(modeltype):
             retain_graph=False,
             create_graph=True,
         )[0]
-        # De-Scale and add to list
-        forces_pred = -grads_energy * (energy_pred+1000)
-        forces_true = data.forces * (data.energy+1000)
-        energy_pred = torch.exp(energy_pred) - 1000.0
-        energy_true = torch.exp(data.energy) - 1000.0
-        energy_pred_list.extend(energy_pred.tolist())
-        energy_true_list.extend(energy_true.tolist())
-        forces_pred_list.extend((forces_pred).flatten().tolist())
-        forces_true_list.extend(forces_true.flatten().tolist())
-        # Add to list
-        # energy_pred_list.extend(energy_pred.tolist())
-        # energy_true_list.extend(data.energy.tolist())
-        # forces_pred_list.extend((-grads_energy).flatten().tolist())
-        # forces_true_list.extend(data.forces.flatten().tolist())
+        
+        # Convert to tensors
+        energy_pred = torch.tensor(energy_pred, device=get_device())
+        grads_energy = torch.tensor(grads_energy, device=get_device())
+        
+        # De-Scale Logarithmic Energy
+        # energy_pred = torch.sign(energy_pred) * (torch.exp(energy_pred.abs()) - 1.0)
+        # energy_true = torch.sign(data.energy) * (torch.exp(data.energy.abs()) - 1.0)
+        # forces_pred = -grads_energy * (torch.abs(energy_pred) + 1.0)
+        # forces_true = data.forces * (torch.abs(energy_true) + 1.0)
+        # De-Scale MinMax [-1,1] Energy
+        energy_pred = ((energy_pred + 1) * (energy_max - energy_min) / 2) + energy_min
+        energy_true = ((data.energy + 1) * (energy_max - energy_min) / 2) + energy_min
+        forces_pred = -grads_energy * ((energy_max - energy_min) / 2)
+        forces_true = data.forces * ((energy_max - energy_min) / 2)
+        # No De-Scaling
+        # energy_pred = energy_pred
+        # energy_true = data.energy
+        # forces_pred = -grads_energy
+        # forces_true = data.forces
+        
+        # Concatenate predictions and true values to initialized tensors
+        energy_pred_all = torch.cat((energy_pred_all, energy_pred.unsqueeze(0)))
+        energy_true_all = torch.cat((energy_true_all, energy_true.unsqueeze(0)))
+        forces_pred_all = torch.cat((forces_pred_all, forces_pred))
+        forces_true_all = torch.cat((forces_true_all, forces_true))
+        
+    # Flatten forces
+    forces_pred_all = forces_pred_all.flatten()
+    forces_true_all = forces_true_all.flatten()
     
     # Get MSE losses
-    energy_loss = torch.nn.MSELoss()(torch.tensor(energy_pred_list), torch.tensor(energy_true_list))
-    forces_loss = torch.nn.MSELoss()(torch.tensor(forces_pred_list), torch.tensor(forces_true_list))
+    energy_loss = torch.nn.MSELoss()(energy_pred_all, energy_true_all)
+    forces_loss = torch.nn.MSELoss()(forces_pred_all, forces_true_all)
     tasks_loss = [energy_loss, forces_loss]
+
     # Get R2 values
-    energy_r2 = torchmetrics.R2Score()(torch.tensor(energy_pred_list), torch.tensor(energy_true_list))
-    forces_r2 = torchmetrics.R2Score()(torch.tensor(forces_pred_list), torch.tensor(forces_true_list))
+    energy_r2 = torchmetrics.R2Score()(energy_pred_all, energy_true_all)
+    forces_r2 = torchmetrics.R2Score()(forces_pred_all, forces_true_all)
     tasks_r2 = [energy_r2, forces_r2]
+    
+    # Convert to lists for plotting
+    energy_true_list = energy_true_all.squeeze().tolist()
+    energy_pred_list = energy_pred_all.squeeze().tolist()
+    forces_true_list = forces_true_all.squeeze().tolist()
+    forces_pred_list = forces_pred_all.squeeze().tolist()
+    
+    # Find the common range for x and y axes based on data
+    energy_min = min(min(energy_true_list), min(energy_pred_list))
+    energy_max = max(max(energy_true_list), max(energy_pred_list))
+    forces_min = min(min(forces_true_list), min(forces_pred_list))
+    forces_max = max(max(forces_true_list), max(forces_pred_list))
 
+    # Set limits based on the maximum range
+    energy_range = (energy_min, energy_max)
+    forces_range = (forces_min, forces_max)
+
+    # Plotting energy predictions
     hist2d_norm = getcolordensity(energy_true_list, energy_pred_list)
-
     fig, ax = plt.subplots()
     plt.scatter(energy_true_list, energy_pred_list, s=8, c=hist2d_norm, vmin=0, vmax=1)
     plt.clim(0, 1)
-    ax.plot(ax.get_xlim(), ax.get_xlim(), ls="--", color="red")
+    ax.plot(energy_range, energy_range, ls="--", color="red")  # Diagonal line with same scale
     plt.colorbar()
     plt.xlabel("True values")
     plt.ylabel("Predicted values")
-    plt.title(f"energy")
-    plt.draw()
+    plt.title("Energy")
+    ax.set_xlim(energy_range)
+    ax.set_ylim(energy_range)
+    ax.set_aspect('equal', 'box')
     plt.tight_layout()
-    plt.savefig(f"./energy_Scatterplot" + ".png", dpi=400)
+    plt.savefig(f"./energy_Scatterplot.png", dpi=400)
 
-    hist2d_norm = getcolordensity(forces_pred_list, forces_true_list)
+    # Plotting forces predictions
+    hist2d_norm = getcolordensity(forces_true_list, forces_pred_list)
     fig, ax = plt.subplots()
     plt.scatter(forces_true_list, forces_pred_list, s=8, c=hist2d_norm, vmin=0, vmax=1)
     plt.clim(0, 1)
-    ax.plot(ax.get_xlim(), ax.get_xlim(), ls="--", color="red")
+    ax.plot(forces_range, forces_range, ls="--", color="red")  # Diagonal line with same scale
     plt.colorbar()
     plt.xlabel("True Values")
     plt.ylabel("Predicted Values")
     plt.title("Forces")
-    plt.draw()
+    ax.set_xlim(forces_range)
+    ax.set_ylim(forces_range)
+    ax.set_aspect('equal', 'box')
     plt.tight_layout()
-    plt.savefig(f"./Forces_Scatterplot" + ".png", dpi=400)
+    plt.savefig(f"./Forces_Scatterplot.png", dpi=400)
     
     return [tasks_loss, tasks_r2]

@@ -186,12 +186,36 @@ def run(model, primitive_bravais_constant):
         config["pna_deg"] = deg.tolist()
 
         setnames = ["trainset", "valset", "testset"]
+        
+        
+        #############################################   NORMAL DATA SCALING   #############################################
+        # Calculate the min and max energy across the train set
+        all_energies = torch.cat([data.energy for data in trainset], dim=0)  # Collect all energies
+        all_forces = torch.cat([data.forces.view(-1) for data in trainset], dim=0)  # Collect all forces
+        energy_min, energy_max = all_energies.min(), all_energies.max()
+        forces_min, forces_max = all_forces.min(), all_forces.max()
+
+        # # Scale energy and forces in all datasets by the energy_min and energy_max
+        # for dataset in [trainset, valset, testset]:
+        #     for data in dataset:
+        #         data.energy = 2 * ((data.energy - energy_min) / (energy_max - energy_min)) - 1  # Scale to [-1, 1]
+        #         data.forces = 2 * ((data.forces - energy_min) / (energy_max - energy_min)) - 1  # Scale forces similarly
+        
+        # Scale energy and forces in all datasets by the forces_min and forces_max
+        for dataset in [trainset, valset, testset]:
+            for data in dataset:
+                data.energy = 2 * ((data.energy - forces_min) / (forces_max - forces_min)) - 1
+                data.forces = 2 * ((data.forces - forces_min) / (forces_max - forces_min)) - 1
+        ##################################################################################################################
+
 
         if args.format == "pickle":
 
             ## pickle
             attrs = dict()
             attrs["pna_deg"] = deg
+            attrs["energy_min"] = energy_min
+            attrs["energy_max"] = energy_max
             SimplePickleWriter(
                 trainset,
                 basedir,
@@ -208,6 +232,7 @@ def run(model, primitive_bravais_constant):
                 # minmax_node_feature=total.minmax_node_feature,
                 # minmax_graph_feature=total.minmax_graph_feature,
                 use_subdir=True,
+                attrs=attrs,
             )
             SimplePickleWriter(
                 testset,
@@ -216,9 +241,11 @@ def run(model, primitive_bravais_constant):
                 # minmax_node_feature=total.minmax_node_feature,
                 # minmax_graph_feature=total.minmax_graph_feature,
                 use_subdir=True,
+                attrs=attrs,
             )
 
         if args.format == "adios":
+            raise ValueError("Adios dataset creation not implemented")
             ## adios
             adwriter = AdiosWriter(fname, comm)
             adwriter.add("trainset", trainset)
@@ -227,6 +254,8 @@ def run(model, primitive_bravais_constant):
             # adwriter.add_global("minmax_node_feature", total.minmax_node_feature)
             # adwriter.add_global("minmax_graph_feature", total.minmax_graph_feature)
             adwriter.add_global("pna_deg", deg)
+            adwriter.add_global("energy_min", energy_min)
+            adwriter.add_global("energy_max", energy_max)
             adwriter.save()
 
     tr.initialize()
@@ -345,8 +374,8 @@ if __name__ == "__main__":
     # Run Force and Energy prediction on Lennard-Jones dataset for each model and pravais constant
     # models = ["DimeNet", "PNAPlus", "PAINN", "MACE"]
     # primitive_bravais_constants = generate_logspace(0.1, 10, 5)
-    models = ["DimeNet"]
-    primitive_bravais_constants = [0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.6]
+    models = ["DimeNet"] 
+    primitive_bravais_constants = [0.50, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.60]
     # primitive_bravais_constants = [0.61, 0.62, 0.63, 0.64, 0.65, 0.66, 0.67, 0.68, 0.69, 0.7]
     # primitive_bravais_constants = [0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.5, 2.8, 3.1, 3.4, 3.8, 4.2, 4.6, 5.0, 5.5, 6.0, 6.4, 6.7, 7.0, 7.2, 7.4, 7.5, 7.6]
     # Remove Logs dir to make sure we evaluate different models each time
@@ -377,3 +406,8 @@ if __name__ == "__main__":
         # Remove datadir to generate with a new primitive_bravais_constant
         print("\n----------------------------------REMOVING DATASET----------------------------------\n")
         os.system("rm -rf dataset")
+    # Final cleanup
+    print("\n----------------------------------REMOVING LOGS----------------------------------\n")
+    os.system("rm -rf logs")
+    print("\n----------------------------------REMOVING DATASET----------------------------------\n")
+    os.system("rm -rf dataset")
