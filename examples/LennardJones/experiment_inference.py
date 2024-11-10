@@ -188,6 +188,8 @@ def evaluate(modeltype):
     num_samples = len(testset)
     energy_min = testset.energy_min
     energy_max = testset.energy_max
+    forces_max = testset.forces_max
+    forces_min = testset.forces_min
     
     energy_true_all = torch.empty(0, device=get_device())
     energy_pred_all = torch.empty(0, device=get_device())
@@ -219,11 +221,16 @@ def evaluate(modeltype):
         # energy_true = torch.sign(data.energy) * (torch.exp(data.energy.abs()) - 1.0)
         # forces_pred = -grads_energy * (torch.abs(energy_pred) + 1.0)
         # forces_true = data.forces * (torch.abs(energy_true) + 1.0)
-        # De-Scale MinMax [-1,1] Energy
-        energy_pred = ((energy_pred + 1) * (energy_max - energy_min) / 2) + energy_min
-        energy_true = ((data.energy + 1) * (energy_max - energy_min) / 2) + energy_min
-        forces_pred = -grads_energy * ((energy_max - energy_min) / 2)
-        forces_true = data.forces * ((energy_max - energy_min) / 2)
+        # De-Scale MinMax [0,1] Energies
+        energy_pred = (energy_pred * (energy_max - energy_min)) + energy_min
+        energy_true = (data.energy * (energy_max - energy_min)) + energy_min
+        forces_pred = (-grads_energy * (energy_max - energy_min)) + energy_min
+        forces_true = (data.forces * (energy_max - energy_min)) + energy_min
+        # # De-Scale MinMax [0,1] Forces
+        # energy_pred = (energy_pred * (forces_max - forces_min)) + forces_min
+        # energy_true = (data.energy * (forces_max - forces_min)) + forces_min
+        # forces_pred = (-grads_energy * (forces_max - forces_min)) + forces_min
+        # forces_true = (data.forces * (forces_max - forces_min)) + forces_min
         # No De-Scaling
         # energy_pred = energy_pred
         # energy_true = data.energy

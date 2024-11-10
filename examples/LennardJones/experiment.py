@@ -195,17 +195,17 @@ def run(model, primitive_bravais_constant):
         energy_min, energy_max = all_energies.min(), all_energies.max()
         forces_min, forces_max = all_forces.min(), all_forces.max()
 
-        # # Scale energy and forces in all datasets by the energy_min and energy_max
-        # for dataset in [trainset, valset, testset]:
-        #     for data in dataset:
-        #         data.energy = 2 * ((data.energy - energy_min) / (energy_max - energy_min)) - 1  # Scale to [-1, 1]
-        #         data.forces = 2 * ((data.forces - energy_min) / (energy_max - energy_min)) - 1  # Scale forces similarly
-        
-        # Scale energy and forces in all datasets by the forces_min and forces_max
+        # Scale energy and forces in all datasets by the energy_min and energy_max
         for dataset in [trainset, valset, testset]:
             for data in dataset:
-                data.energy = 2 * ((data.energy - forces_min) / (forces_max - forces_min)) - 1
-                data.forces = 2 * ((data.forces - forces_min) / (forces_max - forces_min)) - 1
+                data.energy = (data.energy - energy_min) / (energy_max - energy_min)
+                data.forces = (data.forces - energy_min) / (energy_max - energy_min)
+        
+        # Scale energy and forces in all datasets by the forces_min and forces_max
+        # for dataset in [trainset, valset, testset]:
+        #     for data in dataset:
+        #         data.energy = (data.energy - forces_min) / (forces_max - forces_min)
+        #         data.forces = (data.forces - forces_min) / (forces_max - forces_min)
         ##################################################################################################################
 
 
@@ -216,6 +216,8 @@ def run(model, primitive_bravais_constant):
             attrs["pna_deg"] = deg
             attrs["energy_min"] = energy_min
             attrs["energy_max"] = energy_max
+            attrs["forces_min"] = forces_min
+            attrs["forces_max"] = forces_max
             SimplePickleWriter(
                 trainset,
                 basedir,
