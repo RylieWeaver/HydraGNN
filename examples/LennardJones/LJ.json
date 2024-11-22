@@ -5,7 +5,7 @@
   "Dataset": {
     "name": "LJdataset",
     "format": "XYZ",
-    "number_configurations": 20000,
+    "number_configurations": 100,
     "node_features": {
       "name": ["atom_type"],
       "dim": [1],
@@ -21,7 +21,6 @@
     "Architecture": {
       "periodic_boundary_conditions": true,
       "model_type": "DimeNet",
-      "radius": 5.0,
       "max_neighbours": 20,
       "int_emb_size": 32,
       "out_emb_size": 16,
@@ -57,13 +56,13 @@
     },
     "Training": {
       "num_epoch": 30,
-      "batch_size": 4,
+      "batch_size": 5,
       "perc_train": 0.8,
       "patience": 20,
       "EarlyStopping": true,
       "Optimizer": {
         "type": "Adam",
-        "learning_rate": 0.001
+        "learning_rate": 0.000003
       },
       "conv_checkpointing": false,
       "compute_grad_energy": true

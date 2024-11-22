@@ -102,7 +102,7 @@ def getcolordensity(xdata, ydata):
     return hist2d_norm
 
 
-def evaluate(modeltype):
+def evaluate(modeltype, primitive_bravais_constant):
     modelname = "LJ"
 
     parser = argparse.ArgumentParser()
@@ -171,6 +171,7 @@ def evaluate(modeltype):
     else:
         raise NotImplementedError("No supported format: %s" % (args.format))
 
+    config["NeuralNetwork"]["Architecture"]["radius"] = 1.49*primitive_bravais_constant
     model = create_model_config(
         config=config["NeuralNetwork"],
         verbosity=config["Verbosity"]["level"],
@@ -185,18 +186,17 @@ def evaluate(modeltype):
     # for output_name, output_type, output_dim in zip(config["NeuralNetwork"]["Variables_of_interest"]["output_names"], config["NeuralNetwork"]["Variables_of_interest"]["type"], config["NeuralNetwork"]["Variables_of_interest"]["output_dim"]):
 
     # Global variables
-    num_samples = len(testset)
-    energy_min = testset.energy_min
-    energy_max = testset.energy_max
-    forces_max = testset.forces_max
-    forces_min = testset.forces_min
+    energy_min = trainset.energy_min
+    energy_max = trainset.energy_max
+    forces_max = trainset.forces_max
+    forces_min = trainset.forces_min
     
     energy_true_all = torch.empty(0, device=get_device())
     energy_pred_all = torch.empty(0, device=get_device())
     forces_true_all = torch.empty(0, 3, device=get_device())  # Assuming forces are 3D vectors
     forces_pred_all = torch.empty(0, 3, device=get_device())
 
-    for data_id, data in enumerate(tqdm(testset)):
+    for data_id, data in enumerate(tqdm(trainset)):
         data.pos.requires_grad = True
         node_energy_pred = model(data.to(get_device()))[
             0
@@ -214,34 +214,32 @@ def evaluate(modeltype):
         
         # Convert to tensors
         energy_pred = torch.tensor(energy_pred, device=get_device())
+        energy_true = torch.tensor(data.energy, device=get_device())
         grads_energy = torch.tensor(grads_energy, device=get_device())
+        forces_pred = -grads_energy
+        forces_true = torch.tensor(data.forces, device=get_device())
         
+        # # De-Scale MinMax [0,1] Energies
+        # energy_pred = (energy_pred * (energy_max - energy_min)) + energy_min
+        # energy_true = (energy_true * (energy_max - energy_min)) + energy_min
+        # forces_pred = (forces_pred * (energy_max - energy_min))
+        # forces_true = (forces_true * (energy_max - energy_min))
         # De-Scale Logarithmic Energy
-        # energy_pred = torch.sign(energy_pred) * (torch.exp(energy_pred.abs()) - 1.0)
-        # energy_true = torch.sign(data.energy) * (torch.exp(data.energy.abs()) - 1.0)
-        # forces_pred = -grads_energy * (torch.abs(energy_pred) + 1.0)
-        # forces_true = data.forces * (torch.abs(energy_true) + 1.0)
-        # De-Scale MinMax [0,1] Energies
-        energy_pred = (energy_pred * (energy_max - energy_min)) + energy_min
-        energy_true = (data.energy * (energy_max - energy_min)) + energy_min
-        forces_pred = (-grads_energy * (energy_max - energy_min)) + energy_min
-        forces_true = (data.forces * (energy_max - energy_min)) + energy_min
-        # # De-Scale MinMax [0,1] Forces
-        # energy_pred = (energy_pred * (forces_max - forces_min)) + forces_min
-        # energy_true = (data.energy * (forces_max - forces_min)) + forces_min
-        # forces_pred = (-grads_energy * (forces_max - forces_min)) + forces_min
-        # forces_true = (data.forces * (forces_max - forces_min)) + forces_min
-        # No De-Scaling
+        energy_pred = torch.sign(energy_pred) * (torch.exp(energy_pred.abs()) - 1.0)
+        energy_true = torch.sign(energy_true) * (torch.exp(energy_true.abs()) - 1.0)
+        forces_pred = forces_pred * (torch.abs(energy_pred) + 1.0)
+        forces_true = forces_true * (torch.abs(energy_true) + 1.0)
+        # # No De-Scaling
         # energy_pred = energy_pred
-        # energy_true = data.energy
-        # forces_pred = -grads_energy
-        # forces_true = data.forces
+        # energy_true = energy_true
+        # forces_pred = forces_pred
+        # forces_true = forces_true
         
         # Concatenate predictions and true values to initialized tensors
-        energy_pred_all = torch.cat((energy_pred_all, energy_pred.unsqueeze(0)))
-        energy_true_all = torch.cat((energy_true_all, energy_true.unsqueeze(0)))
-        forces_pred_all = torch.cat((forces_pred_all, forces_pred))
-        forces_true_all = torch.cat((forces_true_all, forces_true))
+        energy_pred_all = torch.cat([energy_pred_all, energy_pred.squeeze().unsqueeze(0)], dim=0)
+        energy_true_all = torch.cat([energy_true_all, energy_true.squeeze().unsqueeze(0)], dim=0)
+        forces_pred_all = torch.cat([forces_pred_all, forces_pred.squeeze()], dim=0)
+        forces_true_all = torch.cat([forces_true_all, forces_true.squeeze()], dim=0)
         
     # Flatten forces
     forces_pred_all = forces_pred_all.flatten()

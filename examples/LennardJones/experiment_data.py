@@ -35,6 +35,7 @@ mpi4py.rc.threads = False
 from hydragnn.utils.datasets.abstractrawdataset import AbstractBaseDataset
 from hydragnn.utils.distributed import nsplit
 from hydragnn.preprocess.graph_samples_checks_and_updates import get_radius_graph_pbc
+from hydragnn.utils.model.operations import get_edge_vectors_and_lengths
 
 # Angstrom unit
 # primitive_bravais_lattice_constant_x = 3.8
@@ -48,15 +49,14 @@ from hydragnn.preprocess.graph_samples_checks_and_updates import get_radius_grap
 """High-Level Function"""
 
 
-def create_dataset(path, config):
+def create_dataset(path, config, num_samples, primitive_bravais_constant, radius):
     print("----------------------------------CREATING DATASET----------------------------------")
-    radius_cutoff = config["NeuralNetwork"]["Architecture"]["radius"]
-    number_configurations = (
-        config["Dataset"]["number_configurations"]
-        if "number_configurations" in config["Dataset"]
-        else 300
-    )
-    primitive_bravais_lattice_constant_x = primitive_bravais_lattice_constant_y = primitive_bravais_lattice_constant_z = config["Dataset"]["primitive_bravais_constant"]
+    print("Creating dataset with the following parameters:")
+    print("Path: ", path)
+    print("Number of configurations: ", num_samples)
+    print("Primitive Bravais Lattice Constant: ", primitive_bravais_constant)
+    print("Radius: ", radius)
+    primitive_bravais_lattice_constant_x = primitive_bravais_lattice_constant_y = primitive_bravais_lattice_constant_z = primitive_bravais_constant
     atom_types = [1]
     formula = LJpotential(1.0, 3.4)
     atomic_structure_handler = AtomicStructureHandler(
@@ -66,7 +66,7 @@ def create_dataset(path, config):
             primitive_bravais_lattice_constant_y,
             primitive_bravais_lattice_constant_z,
         ],
-        radius_cutoff,
+        radius,
         formula,
     )
     deterministic_graph_data(
@@ -76,9 +76,9 @@ def create_dataset(path, config):
         primitive_bravais_lattice_constant_y,
         primitive_bravais_lattice_constant_z,
         atomic_structure_handler=atomic_structure_handler,
-        radius_cutoff=radius_cutoff,
-        relative_maximum_atomic_displacement=2e-1,
-        number_configurations=number_configurations,
+        radius_cutoff=radius,
+        relative_maximum_atomic_displacement=0.1,
+        number_configurations=num_samples,
     )
 
 
@@ -88,7 +88,7 @@ def create_dataset(path, config):
 class LJDataset(AbstractBaseDataset):
     """LJDataset dataset class"""
 
-    def __init__(self, dirpath, config, dist=False, sampling=None):
+    def __init__(self, dirpath, config, primitive_bravais_lattive_constant, radius, dist=False, sampling=None):
         super().__init__()
 
         self.dist = dist
@@ -99,14 +99,15 @@ class LJDataset(AbstractBaseDataset):
             self.world_size = torch.distributed.get_world_size()
             self.rank = torch.distributed.get_rank()
 
-        self.radius = config["NeuralNetwork"]["Architecture"]["radius"]
-        primitive_bravais_lattice_constant_x = primitive_bravais_lattice_constant_y = primitive_bravais_lattice_constant_z = config["Dataset"]["primitive_bravais_constant"]
+        self.radius = radius
+        primitive_bravais_lattice_constant_x = primitive_bravais_lattice_constant_y = primitive_bravais_lattice_constant_z = primitive_bravais_lattive_constant
         self.max_neighbours = config["NeuralNetwork"]["Architecture"]["max_neighbours"]
 
         dirfiles = sorted(os.listdir(dirpath))
 
         rx = list(nsplit((dirfiles), self.world_size))[self.rank]
 
+        dataset = []
         for file in rx:
             filepath = os.path.join(dirpath, file)
             self.dataset.append(self.transform_input_to_data_object_base(filepath))
@@ -143,7 +144,12 @@ class LJDataset(AbstractBaseDataset):
                 torch_supercell = torch.cat(
                     [torch_supercell, torch.from_numpy(array_line).unsqueeze(0)], axis=0
                 )
-            elif count > 5:
+            elif 5 < count < 7:
+                array_line = numpy.fromstring(line, dtype=float, sep="\t")
+                primitive_bravais_lattice_constant = torch.tensor(array_line).to(
+                    torch.float32
+                )
+            elif count > 6:
                 array_line = numpy.fromstring(line, dtype=float, sep="\t")
                 torch_data = torch.cat(
                     [torch_data, torch.from_numpy(array_line).unsqueeze(0)], axis=0
@@ -165,12 +171,6 @@ class LJDataset(AbstractBaseDataset):
         forces = torch_data[:, [5, 6, 7]]
         forces_pre_scaling_factor = 1.0
         forces_pre_scaled = forces * forces_pre_scaling_factor
-        # Log Scaling
-        # total_energy = torch.tensor(total_energy).unsqueeze(0)
-        # forces = torch.tensor(forces)
-        # log_total_energy = torch.sign(total_energy) * torch.log(total_energy.abs() + 1.0)
-        # forces_chain_rule = forces / (total_energy.abs() + 1.0)
-        # Min-Max Scaling is done after full dataset creation
 
         data = Data(
             supercell_size=torch_supercell.to(torch.float32),
@@ -180,20 +180,19 @@ class LJDataset(AbstractBaseDataset):
                 torch.float32
             ),
             forces=forces,
-            # forces=forces_chain_rule,
             forces_pre_scaled=forces_pre_scaled,
             pos=torch_data[:, [1, 2, 3]].to(torch.float32),
+            pbc=[True, True, True],
             x=torch.cat([torch_data[:, [0, 4]]], axis=1).to(torch.float32),
             y=torch.tensor(total_energy).unsqueeze(0).to(torch.float32),
             energy_per_atom=torch.tensor(energy_per_atom_pretransformed)
             .unsqueeze(0)
             .to(torch.float32),
             energy=torch.tensor(total_energy).unsqueeze(0).to(torch.float32),
-            # energy=torch.tensor(log_total_energy).to(torch.float32),
         )
 
         # Create pbc edges and lengths
-        edge_creation = get_radius_graph_pbc(self.radius, self.max_neighbours)
+        edge_creation = get_radius_graph_pbc(1.49 * primitive_bravais_lattice_constant.numpy()[0], self.max_neighbours)
         data = edge_creation(data)
 
         return data
@@ -309,6 +308,16 @@ def create_configuration(
     #   NODAL_OUTPUT3(X) = FORCE ACTING ON ATOM IN Z DIRECTION
 
     ###############################################################################################
+    assert primitive_bravais_lattice_constant_x == primitive_bravais_lattice_constant_y == primitive_bravais_lattice_constant_z
+    # Make bravais constants random
+    bravais_min = 3.0
+    bravais_max = primitive_bravais_lattice_constant_x
+    primitive_bravais_lattice_constant = torch.rand(1, 1) * (bravais_max - bravais_min) + bravais_min
+    # primitive_bravais_lattice_constant = torch.tensor([[3.8]])
+    primitive_bravais_lattice_constant_x = primitive_bravais_lattice_constant
+    primitive_bravais_lattice_constant_y = primitive_bravais_lattice_constant
+    primitive_bravais_lattice_constant_z = primitive_bravais_lattice_constant
+    # Create Sample
     count_pos = 0
     number_nodes = uc_x * uc_y * uc_z
     positions = torch.zeros(number_nodes, 3)
@@ -344,9 +353,10 @@ def create_configuration(
     data.supercell_size = torch.diag(
         torch.tensor([supercell_size_x, supercell_size_y, supercell_size_z])
     )
+    data.pbc=[True, True, True]
 
     create_graph_connectivity_pbc = get_radius_graph_pbc(
-        radius_cutoff, max_num_neighbors
+        1.49*primitive_bravais_lattice_constant.numpy()[0][0], max_num_neighbors
     )
     data = create_graph_connectivity_pbc(data)
 
@@ -373,12 +383,17 @@ def create_configuration(
         numpy_row = data.supercell_size[index, :].detach().numpy()
         numpy_string_row = numpy.array2string(numpy_row, precision=64, separator="\t")
         filetxt += "\n" + numpy_string_row.lstrip("[").rstrip("]")
+        
+    for index in range(0, 1):
+        numpy_row = torch.tensor(primitive_bravais_lattice_constant).detach().numpy()
+        numpy_string_row = numpy.array2string(numpy_row, precision=64, separator="\t")
+        filetxt += "\n" + numpy_string_row.lstrip("[").rstrip("]")
 
     for index in range(0, number_nodes):
         numpy_row = data.x[index, :].detach().numpy()
         numpy_string_row = numpy.array2string(numpy_row, precision=64, separator="\t")
         filetxt += "\n" + numpy_string_row.lstrip("[").rstrip("]")
-
+        
     filename = os.path.join(
         path, "output" + str(configuration + configuration_start) + ".txt"
     )
@@ -407,6 +422,7 @@ class AtomicStructureHandler:
 
         for node_id in range(data.pos.shape[0]):
 
+            node_pos = data.pos[node_id, :]
             neighbor_list_indices = torch.where(data.edge_index[0, :] == node_id)[
                 0
             ].tolist()
@@ -416,6 +432,7 @@ class AtomicStructureHandler:
 
                 neighbor_pos = data.pos[neighbor_id, :]
                 distance_vector = neighbor_pos - data.pos[node_id, :]
+                # distance_vector = neighbor_pos - data.pos[node_id, :] + data.edge_shifts[:, edge_id]
 
                 # Adjust the neighbor position based on periodic boundary conditions (PBC)
                 ## If the distance between the atoms is larger than the cutoff radius, the edge is because of PBC conditions

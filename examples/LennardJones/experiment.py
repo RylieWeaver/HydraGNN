@@ -115,7 +115,7 @@ def run(model, primitive_bravais_constant):
     # )
     config["NeuralNetwork"]["Architecture"]["model_type"] = model
     config["Dataset"]["primitive_bravais_constant"] = primitive_bravais_constant
-    config["NeuralNetwork"]["Architecture"]["radius"] = 1.49*primitive_bravais_constant
+    # config["NeuralNetwork"]["Architecture"]["radius"] = 1.49*primitive_bravais_constant
     verbosity = config["Verbosity"]["level"]
     config["NeuralNetwork"]["Variables_of_interest"][
         "graph_feature_names"
@@ -157,7 +157,7 @@ def run(model, primitive_bravais_constant):
     # Check for dataset for each format
     if args.format == "pickle":
         basedir = os.path.join(dirpwd, "dataset", "%s.pickle" % modelname)
-        dataset_exists = os.path.exists(os.path.join(dirpwd, "dataset/LJ.pickle"))
+        dataset_exists = os.path.exists(os.path.join(dirpwd, "dataset/train/LJ.pickle")) and os.path.exists(os.path.join(dirpwd, "dataset/val/LJ.pickle")) and os.path.exists(os.path.join(dirpwd, "dataset/test/LJ.pickle"))
     if args.format == "adios":
         fname = os.path.join(dirpwd, "./dataset/%s.bp" % modelname)
         dataset_exists = os.path.exists(
@@ -168,19 +168,55 @@ def run(model, primitive_bravais_constant):
     if not dataset_exists:
 
         ## local data
-        create_dataset(os.path.join(dirpwd, "dataset/data"), config)
-        total = LJDataset(
-            os.path.join(dirpwd, "dataset/data"),
+        create_dataset(
+            os.path.join(dirpwd, "dataset/train/data"),
             config,
+            num_samples=int(0.8*config["Dataset"]["number_configurations"]),
+            primitive_bravais_constant=config["Dataset"]["primitive_bravais_constant"],
+            radius=1.49*config["Dataset"]["primitive_bravais_constant"],
+            )
+        trainset = LJDataset(
+            os.path.join(dirpwd, "dataset/train/data"),
+            config,
+            config["Dataset"]["primitive_bravais_constant"],
+            1.49*config["Dataset"]["primitive_bravais_constant"],
+            dist=True,
+        )
+        create_dataset(
+            os.path.join(dirpwd, "dataset/val/data"),
+            config,
+            num_samples=int(0.1*config["Dataset"]["number_configurations"]),
+            primitive_bravais_constant=config["Dataset"]["primitive_bravais_constant"],
+            radius=1.49*config["Dataset"]["primitive_bravais_constant"],
+            )
+        valset = LJDataset(
+            os.path.join(dirpwd, "dataset/val/data"),
+            config,
+            config["Dataset"]["primitive_bravais_constant"],
+            1.49*config["Dataset"]["primitive_bravais_constant"],
+            dist=True,
+        )
+        create_dataset(
+            os.path.join(dirpwd, "dataset/test/data"),
+            config,
+            num_samples=int(0.1*config["Dataset"]["number_configurations"]),
+            primitive_bravais_constant=config["Dataset"]["primitive_bravais_constant"],
+            radius=1.49*config["Dataset"]["primitive_bravais_constant"],
+            )
+        testset = LJDataset(
+            os.path.join(dirpwd, "dataset/test/data"),
+            config,
+            config["Dataset"]["primitive_bravais_constant"],
+            1.49*config["Dataset"]["primitive_bravais_constant"],
             dist=True,
         )
         ## This is a local split
-        trainset, valset, testset = split_dataset(
-            dataset=total,
-            perc_train=config["NeuralNetwork"]["Training"]["perc_train"],
-            stratify_splitting=False,
-        )
-        print("Local splitting: ", len(total), len(trainset), len(valset), len(testset))
+        # trainset, valset, testset = split_dataset(
+        #     dataset=total,
+        #     perc_train=config["NeuralNetwork"]["Training"]["perc_train"],
+        #     stratify_splitting=False,
+        # )
+        print("Locally Generated: ", len(trainset), len(valset), len(testset))
 
         deg = gather_deg(trainset)
         config["pna_deg"] = deg.tolist()
@@ -189,23 +225,25 @@ def run(model, primitive_bravais_constant):
         
         
         #############################################   NORMAL DATA SCALING   #############################################
+        # Log Scaling
+        for dataset in [trainset, valset, testset]:
+            for data in dataset:
+                total_energy = data.energy
+                forces = data.forces
+                data.energy = torch.sign(total_energy) * torch.log(total_energy.abs() + 1.0)
+                data.forces = forces / (total_energy.abs() + 1.0)
+        
         # Calculate the min and max energy across the train set
         all_energies = torch.cat([data.energy for data in trainset], dim=0)  # Collect all energies
         all_forces = torch.cat([data.forces.view(-1) for data in trainset], dim=0)  # Collect all forces
         energy_min, energy_max = all_energies.min(), all_energies.max()
         forces_min, forces_max = all_forces.min(), all_forces.max()
 
-        # Scale energy and forces in all datasets by the energy_min and energy_max
-        for dataset in [trainset, valset, testset]:
-            for data in dataset:
-                data.energy = (data.energy - energy_min) / (energy_max - energy_min)
-                data.forces = (data.forces - energy_min) / (energy_max - energy_min)
-        
-        # Scale energy and forces in all datasets by the forces_min and forces_max
+        # # Scale energy and forces in all datasets by the energy_min and energy_max
         # for dataset in [trainset, valset, testset]:
         #     for data in dataset:
-        #         data.energy = (data.energy - forces_min) / (forces_max - forces_min)
-        #         data.forces = (data.forces - forces_min) / (forces_max - forces_min)
+        #         data.energy = (data.energy - energy_min) / (energy_max - energy_min)
+        #         data.forces = (data.forces) / (energy_max - energy_min)
         ##################################################################################################################
 
 
@@ -325,6 +363,7 @@ def run(model, primitive_bravais_constant):
 
     timer.stop()
 
+    config["NeuralNetwork"]["Architecture"]["radius"] = 1.49*config["Dataset"]["primitive_bravais_constant"]
     model = hydragnn.models.create_model_config(
         config=config["NeuralNetwork"],
         verbosity=verbosity,
@@ -377,9 +416,8 @@ if __name__ == "__main__":
     # models = ["DimeNet", "PNAPlus", "PAINN", "MACE"]
     # primitive_bravais_constants = generate_logspace(0.1, 10, 5)
     models = ["DimeNet"] 
-    primitive_bravais_constants = [0.50, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.60]
-    # primitive_bravais_constants = [0.61, 0.62, 0.63, 0.64, 0.65, 0.66, 0.67, 0.68, 0.69, 0.7]
-    # primitive_bravais_constants = [0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.5, 2.8, 3.1, 3.4, 3.8, 4.2, 4.6, 5.0, 5.5, 6.0, 6.4, 6.7, 7.0, 7.2, 7.4, 7.5, 7.6]
+    primitive_bravais_constants = [4.00]
+    # primitive_bravais_constants = [0.50, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.60]
     # Remove Logs dir to make sure we evaluate different models each time
     print("\n----------------------------------REMOVING LOGS----------------------------------\n")
     os.system("rm -rf logs")
@@ -394,7 +432,7 @@ if __name__ == "__main__":
             test_loss_model = []
             print(f"\n----------------------------------Running {model} Model----------------------------------\n")
             run(model, constant)
-            [[test_energy_loss, test_force_loss], [test_energy_r2, test_force_r2]] = evaluate(model)
+            [[test_energy_loss, test_force_loss], [test_energy_r2, test_force_r2]] = evaluate(model, constant)
             # Write task_loss_test to a file
             with open(f"{model}_{constant}_test_evaluate.txt", "w") as f:
                 f.write(f"Primitive Bravais Constant: {constant}\n")

@@ -120,7 +120,7 @@ class SimplePickleWriter:
         ----------
         dataset: locally owned datasets (should be iterable)
         basedir: basedir
-        label: label
+        label: labdataset[0el
         nmax: nmax in case of subdir
         minmax_node_feature: minmax_node_feature
         minmax_graph_feature: minmax_graph_feature
@@ -128,6 +128,7 @@ class SimplePickleWriter:
         """
 
         self.dataset = dataset
+        dataset = list(dataset)
         if not isinstance(dataset, list):
             raise Exception("Unsuppored data type yet.")
 

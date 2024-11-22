@@ -19,7 +19,6 @@ from torch.nn import Identity, SiLU
 from torch_geometric.nn import Linear, Sequential
 from torch_geometric.nn.models.dimenet import (
     BesselBasisLayer,
-    EmbeddingBlock,
     InteractionPPBlock,
     OutputPPBlock,
     SphericalBasisLayer,
@@ -27,6 +26,7 @@ from torch_geometric.nn.models.dimenet import (
 from torch_geometric.utils import scatter
 
 from .Base import Base
+from hydragnn.utils.model.operations import get_edge_vectors_and_lengths
 
 
 class DIMEStack(Base):
@@ -37,6 +37,8 @@ class DIMEStack(Base):
 
     def __init__(
         self,
+        input_args,
+        conv_args,
         basis_emb_size,
         envelope_exponent,
         int_emb_size,
@@ -45,6 +47,7 @@ class DIMEStack(Base):
         num_before_skip,
         num_radial,
         num_spherical,
+        edge_dim,
         radius,
         *args,
         max_neighbours: Optional[int] = None,
@@ -57,9 +60,10 @@ class DIMEStack(Base):
         self.num_spherical = num_spherical
         self.num_before_skip = num_before_skip
         self.num_after_skip = num_after_skip
+        self.edge_dim = edge_dim
         self.radius = radius
 
-        super().__init__(*args, **kwargs)
+        super().__init__(input_args, conv_args, *args, **kwargs)
 
         self.rbf = BesselBasisLayer(num_radial, radius, envelope_exponent)
         self.sbf = SphericalBasisLayer(
@@ -83,7 +87,10 @@ class DIMEStack(Base):
         ), "DimeNet requires more than one hidden dimension between input_dim and output_dim."
         lin = Linear(input_dim, hidden_dim)
         emb = HydraEmbeddingBlock(
-            num_radial=self.num_radial, hidden_channels=hidden_dim, act=SiLU()
+            num_radial=self.num_radial,
+            hidden_channels=hidden_dim,
+            act=SiLU(),
+            edge_dim=self.edge_dim,
         )
         inter = InteractionPPBlock(
             hidden_channels=hidden_dim,
@@ -104,53 +111,68 @@ class DIMEStack(Base):
             act=SiLU(),
             output_initializer="glorot_orthogonal",
         )
-        return Sequential(
-            "x, pos, rbf, sbf, i, j, idx_kj, idx_ji",
-            [
-                (lin, "x -> x"),
-                (emb, "x, rbf, i, j -> x1"),
-                (inter, "x1, rbf, sbf, idx_kj, idx_ji -> x2"),
-                (dec, "x2, rbf, i -> c"),
-                (lambda x, pos: [x, pos], "c, pos -> c, pos"),
-            ],
-        )
 
-    def _conv_args(self, data):
+        if self.use_edge_attr:
+            return Sequential(
+                self.input_args,
+                [
+                    (lin, "inv_node_feat -> inv_node_feat"),
+                    (emb, "inv_node_feat, rbf, i, j, edge_attr -> x1"),
+                    (inter, "x1, rbf, sbf, idx_kj, idx_ji -> x2"),
+                    (dec, "x2, rbf, i -> inv_node_feat"),
+                    (
+                        lambda inv_node_feat, equiv_node_feat: [
+                            inv_node_feat,
+                            equiv_node_feat,
+                        ],
+                        "inv_node_feat, equiv_node_feat -> inv_node_feat, equiv_node_feat",
+                    ),
+                ],
+            )
+        else:
+            return Sequential(
+                self.input_args,
+                [
+                    (lin, "inv_node_feat -> inv_node_feat"),
+                    (emb, "inv_node_feat, rbf, i, j -> x1"),
+                    (inter, "x1, rbf, sbf, idx_kj, idx_ji -> x2"),
+                    (dec, "x2, rbf, i -> inv_node_feat"),
+                    (
+                        lambda x, pos: [x, pos],
+                        "inv_node_feat, equiv_node_feat -> inv_node_feat, equiv_node_feat",
+                    ),
+                ],
+            )
+
+    def _embedding(self, data):
+        super()._embedding(data)
+
         assert (
             data.pos is not None
         ), "DimeNet requires node positions (data.pos) to be set."
 
-        # Extract indices for triplets
+        # Calculate triplet indices
         i, j, idx_i, idx_j, idx_k, idx_kj, idx_ji = triplets(
             data.edge_index, num_nodes=data.x.size(0)
         )
 
-        # Extract supercell size along each dimension
-        # Assuming data.supercell_size is a 3x3 tensor, extract the diagonal elements
-        supercell_size = torch.diagonal(data.supercell_size, 0)  # Shape: (3,)
+        # Calculate edge_vec and edge_dist
+        edge_vec, edge_dist = get_edge_vectors_and_lengths(
+            data.pos, data.edge_index, data.edge_shifts
+        )
 
-        # Compute distance vectors between positions i and j, adjusted for PBCs
-        distance_vectors = self.get_distance_vectors(data.pos[i], data.pos[j], supercell_size)
-        dist = distance_vectors.pow(2).sum(dim=-1).sqrt()
-
-        # Calculate angles for triplets
-        pos_i = data.pos[idx_i]
-        pos_j = data.pos[idx_j]
-        pos_k = data.pos[idx_k]
-
-        # Adjust distance vectors for PBCs
-        pos_ji = self.get_distance_vectors(pos_i, pos_j, supercell_size)
-        pos_kj = self.get_distance_vectors(pos_j, pos_k, supercell_size)
-        pos_ki = pos_kj + pos_ji
-
-        # Compute angles using adjusted vectors
+        # Calculate angles
+        pos_ji = edge_vec[idx_ji]
+        pos_kj = edge_vec[idx_kj]
+        pos_ki = (
+            pos_kj + pos_ji
+        )  # It's important to calculate the vectors separately and then add in case of periodic boundary conditions
         a = (pos_ji * pos_ki).sum(dim=-1)
         b = torch.cross(pos_ji, pos_ki).norm(dim=-1)
         angle = torch.atan2(b, a)
 
-        # Compute radial and spherical basis functions
-        rbf = self.rbf(dist)
-        sbf = self.sbf(dist, angle, idx_kj)
+        rbf = self.rbf(edge_dist.squeeze())
+        sbf = self.sbf(edge_dist.squeeze(), angle, idx_kj)
 
         conv_args = {
             "rbf": rbf,
@@ -161,32 +183,13 @@ class DIMEStack(Base):
             "idx_ji": idx_ji,
         }
 
-        return conv_args
+        if self.use_edge_attr:
+            assert (
+                data.edge_attr is not None
+            ), "Data must have edge attributes if use_edge_attributes is set."
+            conv_args.update({"edge_attr": data.edge_attr})
 
-    def get_distance_vectors(self, pos1, pos2, supercell_size):
-        """
-        Compute distance vectors between two sets of positions, adjusting for periodic boundary conditions.
-        
-        Parameters:
-        - pos1: Tensor of shape (N, 3)
-        - pos2: Tensor of shape (N, 3)
-        - supercell_size: Tensor of shape (3,), containing the size of the supercell along each dimension
-        
-        Returns:
-        - distance_vectors: Tensor of shape (N, 3), adjusted for PBCs
-        """
-        distance_vectors = pos2 - pos1  # Shape: (N, 3)
-        half_size = supercell_size / 2  # Shape: (3,)
-
-        # Adjust for PBCs along each dimension
-        for dim in range(3):
-            dim_size = supercell_size[dim]
-            over_half = distance_vectors[:, dim] > half_size[dim]
-            under_half = distance_vectors[:, dim] < -half_size[dim]
-            distance_vectors[over_half, dim] -= dim_size
-            distance_vectors[under_half, dim] += dim_size
-
-        return distance_vectors
+        return data.x, data.pos, conv_args
 
 
 """
@@ -225,20 +228,50 @@ def triplets(
     return col, row, idx_i, idx_j, idx_k, idx_kj, idx_ji
 
 
-class HydraEmbeddingBlock(EmbeddingBlock):
-    def __init__(self, num_radial: int, hidden_channels: int, act: Callable):
-        super().__init__(
-            num_radial=num_radial, hidden_channels=hidden_channels, act=act
-        )
-        del self.emb  # Atomic embeddings are handled by Hydra.
+class HydraEmbeddingBlock(torch.nn.Module):
+    def __init__(
+        self,
+        num_radial: int,
+        hidden_channels: int,
+        act: Callable,
+        edge_dim: Optional[int] = None,
+    ):
+        super().__init__()
+        self.act = act
+
+        # self.emb = Embedding(95, hidden_channels)  # Atomic embeddings are handled by HYDRA
+        self.lin_rbf = Linear(num_radial, hidden_channels)
+        if edge_dim is not None:  # Optional edge features
+            self.edge_lin = Linear(edge_dim, hidden_channels)
+            self.lin = Linear(4 * hidden_channels, hidden_channels)
+        else:
+            self.lin = Linear(3 * hidden_channels, hidden_channels)
+
         self.reset_parameters()
 
     def reset_parameters(self):
         # self.emb.weight.data.uniform_(-sqrt(3), sqrt(3))
         self.lin_rbf.reset_parameters()
         self.lin.reset_parameters()
+        if hasattr(self, "edge_lin"):
+            self.edge_lin.reset_parameters()
 
-    def forward(self, x: Tensor, rbf: Tensor, i: Tensor, j: Tensor) -> Tensor:
+    def forward(
+        self,
+        x: Tensor,
+        rbf: Tensor,
+        i: Tensor,
+        j: Tensor,
+        edge_attr: Optional[Tensor] = None,
+    ) -> Tensor:
         # x = self.emb(x)
         rbf = self.act(self.lin_rbf(rbf))
-        return self.act(self.lin(torch.cat([x[i], x[j], rbf], dim=-1)))
+
+        # Include edge features if they are provided
+        if edge_attr is not None and hasattr(self, "edge_lin"):
+            edge_attr = self.act(self.edge_lin(edge_attr))
+            out = torch.cat([x[i], x[j], rbf, edge_attr], dim=-1)
+        else:
+            out = torch.cat([x[i], x[j], rbf], dim=-1)
+
+        return self.act(self.lin(out))
