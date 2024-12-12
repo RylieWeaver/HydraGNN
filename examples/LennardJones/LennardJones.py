@@ -63,7 +63,9 @@ if __name__ == "__main__":
         action="store_true",
         help="preprocess only (no training)",
     )
-    parser.add_argument("--inputfile", help="input file", type=str, default="LJ.json")
+    parser.add_argument(
+        "--inputfile", help="input file", type=str, default="LJ_uncertainty.json"
+    )
     parser.add_argument("--model_type", help="model type", type=str, default=None)
     parser.add_argument("--mae", action="store_true", help="do mae calculation")
     parser.add_argument("--ddstore", action="store_true", help="ddstore dataset")
@@ -240,7 +242,7 @@ if __name__ == "__main__":
         info("Pickle load")
         var_config = config["NeuralNetwork"]["Variables_of_interest"]
         trainset = SimplePickleDataset(
-            basedir=basedir, label="trainset", preload=True, var_config=var_config
+            basedir=basedir, label="trainset", preload=False, var_config=var_config
         )
         valset = SimplePickleDataset(
             basedir=basedir, label="valset", var_config=var_config

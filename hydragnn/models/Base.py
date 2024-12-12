@@ -391,14 +391,14 @@ class Base(Module):
         assert (
             data.pos.requires_grad
         ), "data.pos does not have grad, so force predictions cannot be computed. Check that data.pos has grad set to true before prediction."
-        assert (
-            self.num_heads == 1 and self.head_type[0] == "node"
-        ), "Force predictions are only supported for models with one head that predict nodal energy. Check your num_heads and head_types."
+        # assert (
+        #     self.num_heads == 1 and self.head_type[0] == "node"
+        # ), "Force predictions are only supported for models with one head that predict nodal energy. Check your num_heads and head_types."
         # Initialize loss
         tot_loss = 0
         tasks_loss = []
         # Energies
-        node_energy_pred = pred[0]
+        node_energy_pred, forces_pred_direct = pred[0], pred[1]
         graph_energy_pred = torch_scatter.scatter_add(
             node_energy_pred, data.batch, dim=0
         ).float()
@@ -413,7 +413,7 @@ class Base(Module):
         tasks_loss.append(self.loss_function(graph_energy_pred, graph_energy_true))
         # Forces
         forces_true = data.forces.float()
-        forces_pred = torch.autograd.grad(
+        forces_pred_grad = torch.autograd.grad(
             graph_energy_pred,
             data.pos,
             grad_outputs=torch.ones_like(graph_energy_pred),
@@ -421,17 +421,20 @@ class Base(Module):
             create_graph=True,
         )[0].float()
         assert (
-            forces_pred is not None
+            forces_pred_grad is not None
         ), "No gradients were found for data.pos. Does your model use positions for prediction?"
-        forces_pred = -forces_pred
+        forces_pred_grad = -forces_pred_grad
         force_loss_weight = (
             energy_loss_weight
             * torch.mean(torch.abs(graph_energy_true))
             / (torch.mean(torch.abs(forces_true)) + 1e-8)
         )  # Weight force loss and graph energy equally
         tot_loss += (
-            self.loss_function(forces_pred, forces_true) * force_loss_weight
+            self.loss_function(forces_pred_direct, forces_true) * force_loss_weight / 2
         )  # Have force-weight be the complement to energy-weight
+        tot_loss += (
+            self.loss_function(forces_pred_grad, forces_true) * force_loss_weight / 2
+        )
         ## FixMe: current loss functions require the number of heads to be the number of things being predicted
         ##        so, we need to do loss calculation manually without calling the other functions.
 
