@@ -53,6 +53,11 @@ class DIMEStack(Base):
         max_neighbours: Optional[int] = None,
         **kwargs
     ):
+        # Add effect of pos to input dim
+        args = list(args)
+        args[0] = int(args[0]) + 3
+        args = tuple(args)
+
         self.basis_emb_size = basis_emb_size
         self.int_emb_size = int_emb_size
         self.out_emb_size = out_emb_size
@@ -189,7 +194,7 @@ class DIMEStack(Base):
             ), "Data must have edge attributes if use_edge_attributes is set."
             conv_args.update({"edge_attr": data.edge_attr})
 
-        return data.x, data.pos, conv_args
+        return torch.cat([data.x, data.pos], dim=1), data.pos, conv_args
 
 
 """

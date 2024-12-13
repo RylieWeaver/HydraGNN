@@ -47,6 +47,7 @@ class Base(Module):
         num_conv_layers: int = 16,
         num_nodes: int = None,
     ):
+        output_dim = [1, 3]
         super().__init__()
         self.device = get_device()
         self.input_args = input_args
@@ -143,6 +144,7 @@ class Base(Module):
             )
         conv_args = {"edge_index": data.edge_index.to(torch.long)}
         if self.use_edge_attr:
+            data.edge_attr = data.edge_shifts
             assert (
                 data.edge_attr is not None
             ), "Data must have edge attributes if use_edge_attributes is set."
@@ -426,8 +428,8 @@ class Base(Module):
         forces_pred_grad = -forces_pred_grad
         force_loss_weight = (
             energy_loss_weight
-            * torch.mean(torch.abs(graph_energy_true))
-            / (torch.mean(torch.abs(forces_true)) + 1e-8)
+            * torch.std(graph_energy_true)
+            / (torch.std(forces_true) + 1e-8)
         )  # Weight force loss and graph energy equally
         tot_loss += (
             self.loss_function(forces_pred_direct, forces_true) * force_loss_weight / 2

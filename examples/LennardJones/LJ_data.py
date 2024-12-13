@@ -433,8 +433,8 @@ class AtomicStructureHandler:
                 distance_vector = data.pos[node_id, :] - neighbor_pos
 
                 # pair_distance = data.edge_attr[edge_id].item()
-                interatomic_potential[node_id] += self.formula.potential_energy(
-                    distance_vector
+                interatomic_potential[node_id] += (
+                    self.formula.potential_energy(distance_vector) / 2
                 )
 
                 derivative_x = self.formula.derivative_x(distance_vector)

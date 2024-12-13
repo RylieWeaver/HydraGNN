@@ -1,4 +1,5 @@
 import os, json
+import sys
 
 import torch
 
@@ -15,22 +16,40 @@ except:
     from torch_geometric.data import DataLoader
 
 import hydragnn
+from hydragnn.utils.uncertainty_utils import (
+    minmax_scale_data,
+    save_dataset,
+    save_scaling,
+    rotate_data,
+    rotate_dataset,
+)
+
 
 # Update each sample prior to loading.
 def md17_pre_transform(data):
     # Set descriptor as element type.
     data.x = data.z.float().view(-1, 1)
+    data.forces = data.force
     # Only predict energy (index 0 of 2 properties) for this run.
-    data.y = data.energy / len(data.x)
-    graph_features_dim = [1]
-    node_feature_dim = [1]
+    # data.y = data.energy / len(data.x)
+    data.y = torch.cat(
+        [data.energy.view(-1, 1), data.force.flatten().unsqueeze(-1)], dim=0
+    )
+    data.y_loc = torch.tensor([[0, 1, 1 + data.num_nodes * 3]])
+    # graph_features_dim = [1]
+    # node_feature_dim = [1]
     data = compute_edges(data)
+    data = rotate_data(data)
+    # NOTE  It's important to have data from various orientations in order to truly represent energy/force predictions.
+    #       I was getting a R2 score of 0.6 with invariant prediction, which indicates that the data wasn't representatice
+    #       of the true distribution.
     return data
 
 
 # Randomly select ~1000 samples
 def md17_pre_filter(data):
-    return torch.rand(1) < 0.25
+    # return torch.rand(1) < 0.01
+    return True
 
 
 # Set this path for output.
@@ -38,9 +57,11 @@ try:
     os.environ["SERIALIZED_DATA_PATH"]
 except:
     os.environ["SERIALIZED_DATA_PATH"] = os.getcwd()
+path = os.environ.get("SERIALIZED_DATA_PATH")
+
 
 # Configurable run choices (JSON file that accompanies this example script).
-filename = os.path.join(os.path.dirname(__file__), "md17.json")
+filename = os.path.join(os.path.dirname(__file__), "md17_uncertainty.json")
 with open(filename, "r") as f:
     config = json.load(f)
 verbosity = config["Verbosity"]["level"]
@@ -50,7 +71,7 @@ var_config = config["NeuralNetwork"]["Variables_of_interest"]
 # Always initialize for multi-rank training.
 world_size, world_rank = hydragnn.utils.distributed.setup_ddp()
 
-log_name = "md17_test"
+log_name = "md17"
 # Enable print to log file.
 hydragnn.utils.print.print_utils.setup_log(log_name)
 
@@ -69,9 +90,20 @@ dataset = torch_geometric.datasets.MD17(
     pre_transform=md17_pre_transform,
     pre_filter=md17_pre_filter,
 )
+dataset = dataset[:20000]
 train, val, test = hydragnn.preprocess.split_dataset(
     dataset, config["NeuralNetwork"]["Training"]["perc_train"], False
 )
+# NOTE that we're saving BEFORE scaling
+save_dataset(path, train, "train")
+save_dataset(path, val, "val")
+save_dataset(path, test, "test")
+
+train, val, test, train_energy_min, train_energy_max = minmax_scale_data(
+    train, val, test
+)
+save_scaling(os.path.join(path, "scaling.pt"), train_energy_min, train_energy_max)
+
 (train_loader, val_loader, test_loader,) = hydragnn.preprocess.create_dataloaders(
     train, val, test, config["NeuralNetwork"]["Training"]["batch_size"]
 )
@@ -87,6 +119,7 @@ model = hydragnn.models.create_model_config(
 model = hydragnn.utils.distributed.get_distributed_model(model, verbosity)
 
 learning_rate = config["NeuralNetwork"]["Training"]["Optimizer"]["learning_rate"]
+compute_grad_energy = config["NeuralNetwork"]["Training"]["compute_grad_energy"]
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     optimizer, mode="min", factor=0.5, patience=5, min_lr=0.00001
@@ -107,4 +140,11 @@ hydragnn.train.train_validate_test(
     config["NeuralNetwork"],
     log_name,
     verbosity,
+    compute_grad_energy=compute_grad_energy,
 )
+
+hydragnn.utils.model.save_model(model, optimizer, log_name)
+hydragnn.utils.profiling_and_tracing.print_timers(verbosity)
+
+
+sys.exit(0)
