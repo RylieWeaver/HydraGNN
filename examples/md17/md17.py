@@ -17,7 +17,9 @@ except:
 
 import hydragnn
 from hydragnn.utils.uncertainty_utils import (
+    get_minmax_scaling_parameters,
     minmax_scale_data,
+    minmax_scale_dataset,
     save_dataset,
     save_scaling,
     rotate_data,
@@ -46,7 +48,6 @@ def md17_pre_transform(data):
     return data
 
 
-# Randomly select ~1000 samples
 def md17_pre_filter(data):
     # return torch.rand(1) < 0.01
     return True
@@ -81,30 +82,51 @@ hydragnn.utils.print.print_utils.setup_log(log_name)
 # NOTE: transforms/filters will NOT be re-run unless the qm9/processed/ directory is removed.
 compute_edges = hydragnn.preprocess.get_radius_graph_config(arch_config)
 
-# Fix for MD17 datasets
-torch_geometric.datasets.MD17.file_names["uracil"] = "md17_uracil.npz"
+# Check if split is already done
+if not (
+    os.path.exists(os.path.join(path, "train.pt"))
+    and os.path.exists(os.path.join(path, "val.pt"))
+    and os.path.exists(os.path.join(path, "test.pt"))
+):
+    # Fix for MD17 datasets
+    torch_geometric.datasets.MD17.file_names["uracil"] = "md17_uracil.npz"
 
-dataset = torch_geometric.datasets.MD17(
-    root="dataset/md17",
-    name="uracil",
-    pre_transform=md17_pre_transform,
-    pre_filter=md17_pre_filter,
-)
-dataset = dataset[:20000]
-train, val, test = hydragnn.preprocess.split_dataset(
-    dataset, config["NeuralNetwork"]["Training"]["perc_train"], False
-)
-# NOTE that we're saving BEFORE scaling
-save_dataset(path, train, "train")
-save_dataset(path, val, "val")
-save_dataset(path, test, "test")
+    dataset = torch_geometric.datasets.MD17(
+        root="dataset/md17",
+        name="uracil",
+        pre_transform=md17_pre_transform,
+        pre_filter=md17_pre_filter,
+    )
+    dataset = dataset[:20000]
+    train, val, test = hydragnn.preprocess.split_dataset(
+        dataset, config["NeuralNetwork"]["Training"]["perc_train"], False
+    )
+    # NOTE that we're saving BEFORE scaling
+    save_dataset(path, train, "train")
+    save_dataset(path, val, "val")
+    save_dataset(path, test, "test")
 
-train, val, test, train_energy_min, train_energy_max = minmax_scale_data(
-    train, val, test
-)
-save_scaling(os.path.join(path, "scaling.pt"), train_energy_min, train_energy_max)
+    train_energy_min, train_energy_max = get_minmax_scaling_parameters(train)
+    save_scaling(os.path.join(path, "scaling.pt"), train_energy_min, train_energy_max)
+    train, val, test = minmax_scale_dataset(
+        train, val, test, train_energy_min, train_energy_max
+    )
+# Else load the data (this will keep all our experiments with the same datasets)
+else:
+    train = torch.load(os.path.join(path, "train.pt"))
+    val = torch.load(os.path.join(path, "val.pt"))
+    test = torch.load(os.path.join(path, "test.pt"))
+    train_energy_min, train_energy_max = torch.load(os.path.join(path, "scaling.pt"))
+    train, val, test = minmax_scale_dataset(
+        train, val, test, train_energy_min, train_energy_max
+    )
 
-(train_loader, val_loader, test_loader,) = hydragnn.preprocess.create_dataloaders(
+# Now do training
+(
+    train_loader,
+    val_loader,
+    test_loader,
+) = hydragnn.preprocess.create_dataloaders(
     train, val, test, config["NeuralNetwork"]["Training"]["batch_size"]
 )
 

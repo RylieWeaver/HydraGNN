@@ -6,21 +6,36 @@ from torch_geometric.data import Data
 from scipy.stats import pearsonr, spearmanr
 
 
-def minmax_scale_data(train, val, test):
+def get_minmax_scaling_parameters(train):
     # Do minmax scaling from just the training set
     train_energy = torch.cat([data.energy for data in train])
     train_energy_min = train_energy.min()
     train_energy_max = train_energy.max()
 
-    # Scale energy and forces by same factor
+    return train_energy_min, train_energy_max
+
+
+def minmax_scale_data(data, train_energy_min, train_energy_max):
+    data.energy = (data.energy - train_energy_min) / (
+        train_energy_max - train_energy_min
+    )
+    data.forces = (data.forces) / (train_energy_max - train_energy_min)
+    return data
+
+
+def minmax_scale_dataset(
+    train, val, test, train_energy_min=None, train_energy_max=None
+):
+    # Do minmax scaling from just the training set
+    if train_energy_min is None or train_energy_max is None:
+        train_energy_min, train_energy_max = get_scaling_parameters(train)
+
+    # Scale the energy values
     for dataset in [train, val, test]:
         for data in dataset:
-            data.energy = (data.energy - train_energy_min) / (
-                train_energy_max - train_energy_min
-            )
-            data.forces = data.forces / (train_energy_max - train_energy_min)
+            data = minmax_scale_data(data, train_energy_min, train_energy_max)
 
-    return train, val, test, train_energy_min, train_energy_max
+    return train, val, test
 
 
 def save_dataset(path, split, split_name):
