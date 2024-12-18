@@ -20,6 +20,7 @@ from hydragnn.utils.uncertainty_utils import (
     minmax_scale_dataset,
     save_dataset,
     save_scaling,
+    load_scaling,
     rotate_data,
     rotate_dataset,
 )
@@ -125,19 +126,13 @@ def objective(trial):
     config["NeuralNetwork"]["Training"]["Optimizer"]["learning_rate"] = learning_rate
     config["NeuralNetwork"]["Training"]["batch_size"] = batch_size
 
-    (
-        train_loader,
-        val_loader,
-        test_loader,
-    ) = hydragnn.preprocess.create_dataloaders(
+    (train_loader, val_loader, test_loader,) = hydragnn.preprocess.create_dataloaders(
         train, val, test, config["NeuralNetwork"]["Training"]["batch_size"]
     )
 
     config = hydragnn.utils.input_config_parsing.update_config(
         config, train_loader, val_loader, test_loader
     )
-
-    hydragnn.utils.input_config_parsing.save_config(config, log_name)
 
     model = hydragnn.models.create_model_config(
         config=config["NeuralNetwork"],
@@ -146,14 +141,14 @@ def objective(trial):
     model = hydragnn.utils.distributed.get_distributed_model(model, verbosity)
 
     learning_rate = config["NeuralNetwork"]["Training"]["Optimizer"]["learning_rate"]
+    compute_grad_energy = config["NeuralNetwork"]["Training"]["compute_grad_energy"]
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=5, min_lr=0.000001
     )
 
-    hydragnn.utils.model.load_existing_model_config(
-        model, config["NeuralNetwork"]["Training"], optimizer=optimizer
-    )
+    writer = hydragnn.utils.model.model.get_summary_writer(log_name)
+    hydragnn.utils.input_config_parsing.save_config(config, log_name)
 
     ##################################################################################################################
 
@@ -169,7 +164,7 @@ def objective(trial):
         log_name,
         verbosity,
         create_plots=False,
-        compute_grad_energy=True,
+        compute_grad_energy=compute_grad_energy,
     )
 
     hydragnn.utils.model.save_model(model, optimizer, log_name)
@@ -188,7 +183,11 @@ def objective(trial):
 
     # Return the metric to minimize (e.g., validation loss)
     validation_loss, tasks_loss = hydragnn.train.validate(
-        val_loader, model, verbosity, reduce_ranks=True
+        val_loader,
+        model,
+        verbosity,
+        reduce_ranks=True,
+        compute_grad_energy=compute_grad_energy,
     )
 
     # Move validation_loss to the CPU and convert to NumPy object
@@ -197,11 +196,20 @@ def objective(trial):
     # Append trial results to the DataFrame
     trial_results.loc[trial_id] = [
         trial_id,
+        config["NeuralNetwork"]["Architecture"]["model_type"],
         hidden_dim,
+        int_emb_size,
+        out_emb_size,
+        num_before_skip,
+        num_after_skip,
+        basis_emb_size,
+        num_radial,
+        num_spherical,
         num_conv_layers,
         num_headlayers,
         dim_headlayers,
-        model_type,
+        learning_rate,
+        batch_size,
         validation_loss,
     ]
 
@@ -279,7 +287,7 @@ if __name__ == "__main__":
         train = torch.load(os.path.join(path, "train.pt"))
         val = torch.load(os.path.join(path, "val.pt"))
         test = torch.load(os.path.join(path, "test.pt"))
-        train_energy_min, train_energy_max = torch.load(
+        train_energy_min, train_energy_max = load_scaling(
             os.path.join(path, "scaling.pt")
         )
         train, val, test = minmax_scale_dataset(
@@ -327,7 +335,10 @@ if __name__ == "__main__":
     best_trial_info = pd.Series(
         {"Trial_ID": best_trial_id, "Best_Validation_Loss": best_validation_loss}
     )
-    trial_results = trial_results.append(best_trial_info, ignore_index=True)
+    # trial_results = trial_results.append(best_trial_info, ignore_index=True)  # Deprecated
+    trial_results = pd.concat(
+        [trial_results, best_trial_info.to_frame().T], ignore_index=True
+    )
 
     # Save the trial results to a CSV file
     trial_results.to_csv("hpo_results.csv", index=False)

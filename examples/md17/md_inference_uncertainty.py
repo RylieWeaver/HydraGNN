@@ -26,7 +26,8 @@ from hydragnn.utils.distributed import get_device, setup_ddp
 from hydragnn.utils.model import load_existing_model
 from hydragnn.models.create import create_model_config
 from hydragnn.utils.uncertainty_utils import (
-    minmax_scale_data,
+    minmax_scale_dataset,
+    load_scaling,
     reverse_minmax_scale_data,
 )
 
@@ -107,7 +108,7 @@ def plot_scatter(x, y, hist2d_norm, xlabel, ylabel, title, filename):
 
 if __name__ == "__main__":
 
-    modelname = "md17"
+    modelname = "md17_optuna_4"  # This should be changed to be the best model from HPO
 
     parser = argparse.ArgumentParser(
         description="Evaluate HydraGNN Model on Test Dataset"
@@ -116,7 +117,7 @@ if __name__ == "__main__":
         "--inputfile",
         help="Path to the config JSON file",
         type=str,
-        default="./logs/md17/config.json",
+        default="./logs/md17_optuna_4/config.json",  # This should be changed to be the best model from HPO
     )
     args = parser.parse_args()
 
@@ -168,8 +169,11 @@ if __name__ == "__main__":
     print(f"Loaded test set with {len(testset)} samples.")
 
     # Scale the data
-    trainset, valset, testset, train_energy_min, train_energy_max = minmax_scale_data(
-        trainset, valset, testset
+    train_energy_min, train_energy_max = load_scaling(
+        os.path.join(serialized_data_path, "scaling.pt")
+    )
+    trainset, valset, testset = minmax_scale_dataset(
+        trainset, valset, testset, train_energy_min, train_energy_max
     )
 
     # Initialize the model

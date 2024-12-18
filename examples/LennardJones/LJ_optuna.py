@@ -122,11 +122,7 @@ def objective(trial):
     config["NeuralNetwork"]["Training"]["Optimizer"]["learning_rate"] = learning_rate
     config["NeuralNetwork"]["Training"]["batch_size"] = batch_size
 
-    (
-        train_loader,
-        val_loader,
-        test_loader,
-    ) = hydragnn.preprocess.create_dataloaders(
+    (train_loader, val_loader, test_loader,) = hydragnn.preprocess.create_dataloaders(
         trainset, valset, testset, config["NeuralNetwork"]["Training"]["batch_size"]
     )
 
@@ -187,7 +183,7 @@ def objective(trial):
 
     # Return the metric to minimize (e.g., validation loss)
     validation_loss, tasks_loss = hydragnn.train.validate(
-        val_loader, model, verbosity, reduce_ranks=True
+        val_loader, model, verbosity, reduce_ranks=True, compute_grad_energy=True
     )
 
     # Move validation_loss to the CPU and convert to NumPy object
@@ -196,11 +192,20 @@ def objective(trial):
     # Append trial results to the DataFrame
     trial_results.loc[trial_id] = [
         trial_id,
+        config["NeuralNetwork"]["Architecture"]["model_type"],
         hidden_dim,
+        int_emb_size,
+        out_emb_size,
+        num_before_skip,
+        num_after_skip,
+        basis_emb_size,
+        num_radial,
+        num_spherical,
         num_conv_layers,
         num_headlayers,
         dim_headlayers,
-        model_type,
+        learning_rate,
+        batch_size,
         validation_loss,
     ]
 
@@ -438,7 +443,10 @@ if __name__ == "__main__":
     best_trial_info = pd.Series(
         {"Trial_ID": best_trial_id, "Best_Validation_Loss": best_validation_loss}
     )
-    trial_results = trial_results.append(best_trial_info, ignore_index=True)
+    # trial_results = trial_results.append(best_trial_info, ignore_index=True)  # Deprecated
+    trial_results = pd.concat(
+        [trial_results, best_trial_info.to_frame().T], ignore_index=True
+    )
 
     # Save the trial results to a CSV file
     trial_results.to_csv("hpo_results.csv", index=False)
