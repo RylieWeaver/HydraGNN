@@ -126,7 +126,11 @@ def objective(trial):
     config["NeuralNetwork"]["Training"]["Optimizer"]["learning_rate"] = learning_rate
     config["NeuralNetwork"]["Training"]["batch_size"] = batch_size
 
-    (train_loader, val_loader, test_loader,) = hydragnn.preprocess.create_dataloaders(
+    (
+        train_loader,
+        val_loader,
+        test_loader,
+    ) = hydragnn.preprocess.create_dataloaders(
         train, val, test, config["NeuralNetwork"]["Training"]["batch_size"]
     )
 
@@ -329,7 +333,7 @@ if __name__ == "__main__":
 
     # Create a study object and optimize the objective function
     study = optuna.create_study(direction="minimize")
-    study.optimize(objective, n_trials=5)
+    study.optimize(objective, n_trials=50)
 
     # Update the best trial information directly within the DataFrame
     best_trial_info = pd.Series(
