@@ -253,6 +253,9 @@ if __name__ == "__main__":
         # minmax_node_feature = trainset.minmax_node_feature
         # minmax_graph_feature = trainset.minmax_graph_feature
         pna_deg = trainset.pna_deg
+        # trainset = [trainset[i] for i in range(800)]
+        # valset = [valset[i] for i in range(100)]
+        # testset = [testset[i] for i in range(100)]
         if args.ddstore:
             opt = {"ddstore_width": args.ddstore_width}
             trainset = DistDataset(trainset, "trainset", comm, **opt)

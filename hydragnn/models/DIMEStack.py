@@ -192,8 +192,9 @@ class DIMEStack(Base):
             assert (
                 data.edge_attr is not None
             ), "Data must have edge attributes if use_edge_attributes is set."
-            conv_args.update({"edge_attr": data.edge_attr})
+            conv_args.update({"edge_attr": data.edge_shifts})
 
+        # return data.x, data.pos, conv_args
         return torch.cat([data.x, data.pos], dim=1), data.pos, conv_args
 
 

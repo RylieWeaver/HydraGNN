@@ -415,7 +415,7 @@ class Base(Module):
         tasks_loss.append(self.loss_function(graph_energy_pred, graph_energy_true))
         # Forces
         forces_true = data.forces.float()
-        forces_pred_grad = torch.autograd.grad(
+        forces_pred_grad = -torch.autograd.grad(
             graph_energy_pred,
             data.pos,
             grad_outputs=torch.ones_like(graph_energy_pred),
@@ -425,11 +425,10 @@ class Base(Module):
         assert (
             forces_pred_grad is not None
         ), "No gradients were found for data.pos. Does your model use positions for prediction?"
-        forces_pred_grad = -forces_pred_grad
         force_loss_weight = (
             energy_loss_weight
-            * torch.std(graph_energy_true)
-            / (torch.std(forces_true) + 1e-8)
+            * torch.mean(torch.abs(graph_energy_true))
+            / (torch.mean(torch.abs(forces_true)) + 1e-8)
         )  # Weight force loss and graph energy equally
         tot_loss += (
             self.loss_function(forces_pred_direct, forces_true) * force_loss_weight / 2
