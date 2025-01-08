@@ -42,7 +42,7 @@ def md17_pre_transform(data):
     # Only predict energy (index 0 of 2 properties) for this run.
     # data.y = data.energy / len(data.x)
     data.y = torch.cat(
-        [data.energy.view(-1, 1), data.force.flatten().unsqueeze(-1)], dim=0
+        [data.energy.view(-1, 1), data.forces.flatten().unsqueeze(-1)], dim=0
     )
     data.y_loc = torch.tensor([[0, 1, 1 + data.num_nodes * 3]])
     # graph_features_dim = [1]
