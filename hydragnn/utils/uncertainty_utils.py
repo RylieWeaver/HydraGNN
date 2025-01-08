@@ -112,6 +112,7 @@ def rotate_data(data):
     # Rotate positions
     data.pos = torch.matmul(data.pos, rotation_matrix.T)
     data.forces = torch.matmul(data.forces, rotation_matrix.T)
+    data.force = torch.matmul(data.force, rotation_matrix.T)
 
     return data
 
