@@ -77,7 +77,7 @@ def rotate_data(data):
     Rotate the positions and forces in data.pos by a random angle/axis.
     """
     # Convert angle to radians
-    degrees = np.random.uniform(0, 360)
+    angle_degrees = np.random.uniform(0, 360)
     angle_radians = math.radians(angle_degrees)
 
     # Define rotation matrix based on the axis
@@ -149,11 +149,11 @@ def calculate_metrics(dataset):
     # Get metrics for each data point
     for data in dataset:
         # Extract values
-        energy_true = data.energy
-        energy_pred = data.energy_pred
-        forces_true = data.forces
-        forces_pred_direct = data.forces_pred_direct
-        forces_pred_grad = data.forces_pred_grad
+        energy_true = data.energy.cpu()
+        energy_pred = data.energy_pred.cpu()
+        forces_true = data.forces.cpu()
+        forces_pred_direct = data.forces_pred_direct.cpu()
+        forces_pred_grad = data.forces_pred_grad.cpu()
 
         # Convert to flat numpy arrays
         energy_true = np.array(energy_true)

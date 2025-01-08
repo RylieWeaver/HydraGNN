@@ -126,11 +126,7 @@ def objective(trial):
     config["NeuralNetwork"]["Training"]["Optimizer"]["learning_rate"] = learning_rate
     config["NeuralNetwork"]["Training"]["batch_size"] = batch_size
 
-    (
-        train_loader,
-        val_loader,
-        test_loader,
-    ) = hydragnn.preprocess.create_dataloaders(
+    (train_loader, val_loader, test_loader,) = hydragnn.preprocess.create_dataloaders(
         train, val, test, config["NeuralNetwork"]["Training"]["batch_size"]
     )
 
@@ -270,7 +266,7 @@ if __name__ == "__main__":
             pre_transform=md17_pre_transform,
             pre_filter=md17_pre_filter,
         )
-        dataset = dataset[:20000]
+        # dataset = dataset[:20000]
         train, val, test = hydragnn.preprocess.split_dataset(
             dataset, config["NeuralNetwork"]["Training"]["perc_train"], False
         )

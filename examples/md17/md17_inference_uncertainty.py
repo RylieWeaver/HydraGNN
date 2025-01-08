@@ -108,7 +108,7 @@ def plot_scatter(x, y, hist2d_norm, xlabel, ylabel, title, filename):
 
 if __name__ == "__main__":
 
-    modelname = "md17_optuna_18"  # This should be changed to be the best model from HPO
+    modelname = "md17_optuna_16"  # This should be changed to be the best model from HPO
 
     parser = argparse.ArgumentParser(
         description="Evaluate HydraGNN Model on Test Dataset"
@@ -117,7 +117,7 @@ if __name__ == "__main__":
         "--inputfile",
         help="Path to the config JSON file",
         type=str,
-        default="./logs/md17_optuna_18/config.json",  # This should be changed to be the best model from HPO
+        default="./logs/md17_optuna_16/config.json",  # This should be changed to be the best model from HPO
     )
     args = parser.parse_args()
 
