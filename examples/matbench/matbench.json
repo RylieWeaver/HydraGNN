@@ -1,0 +1,63 @@
+{
+    "Verbosity": {
+        "level": 2
+    },
+    "NeuralNetwork": {
+        "Profile": {"enable": 1},
+        "Architecture": {
+            "model_type": "MACE",
+            "radius": 24.0,
+            "max_neighbours": 5,
+            "int_emb_size": 8,
+            "out_emb_size": 8,
+            "basis_emb_size": 8,
+            "num_gaussians": 6,
+            "num_filters": 6,
+            "num_before_skip": 1,
+            "num_after_skip": 1,
+            "envelope_exponent": 5,
+            "max_ell": 2,
+            "node_max_ell": 2,
+            "num_radial": 8,
+            "num_spherical": 3,
+            "num_conv_layers": 4,
+            "hidden_dim": 60,
+            "output_heads": {
+                "graph":{
+                    "num_sharedlayers": 2,
+                    "dim_sharedlayers": 25,
+                    "num_headlayers": 1,
+                    "dim_headlayers": [25,25]
+                }
+            },
+            "task_weights": [1.0]
+        },
+        "Variables_of_interest": {
+            "input_node_features": [0],
+            "output_names": ["graph_property"],
+            "output_index": [0],
+            "output_dim": [1],
+            "type": ["graph"],
+            "denormalize_output": false
+        },
+        "Training": {
+            "num_epoch": 200,
+            "perc_train": 0.8,
+            "loss_function_type": "mse",
+            "batch_size": 16,
+            "continue": 0,
+            "startfrom": "existing_model",
+            "Optimizer": {
+                "type": "AdamW",
+                "learning_rate": 1e-1
+            },
+            "EarlyStopping": true,
+            "patience": 25
+        }
+    },
+    "Visualization": {
+        "plot_init_solution": true,
+        "plot_hist_solution": false,
+        "create_plots": true
+    }
+}
