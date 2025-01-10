@@ -5,29 +5,20 @@
     "NeuralNetwork": {
         "Profile": {"enable": 1},
         "Architecture": {
-            "global_attn_engine": "",
-            "global_attn_type": "",
-            "mpnn_type": "DimeNet",
+            "model_type": "DimeNet",
             "radius": 7,
             "max_neighbours": 5,
-            "basis_emb_size": 8,
-            "int_emb_size": 32,
-            "out_emb_size": 16,
-            "num_before_skip": 1,
-            "num_after_skip": 1,
-            "envelope_exponent": 5,
             "num_radial": 5,
-            "num_spherical": 3,
             "hidden_dim": 25,
             "num_conv_layers": 2,
             "output_heads": {
                 "node": {
                     "num_headlayers": 2, 
-                    "dim_headlayers": [60, 20], 
+                    "dim_headlayers": [20, 20], 
                     "type": "mlp"
                 }
             },
-            "task_weights": [1.0]
+            "task_weights": [1.0, 1.0]
         },
         "Variables_of_interest": {
             "input_node_features": [0],
