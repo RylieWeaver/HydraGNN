@@ -437,7 +437,7 @@ if __name__ == "__main__":
 
     # Create a study object and optimize the objective function
     study = optuna.create_study(direction="minimize")
-    study.optimize(objective, n_trials=50)
+    study.optimize(objective, n_trials=50, n_jobs=4)
 
     # Update the best trial information directly within the DataFrame
     best_trial_info = pd.Series(

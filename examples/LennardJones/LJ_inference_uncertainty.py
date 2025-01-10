@@ -119,11 +119,11 @@ def plot_scatter(x, y, hist2d_norm, xlabel, ylabel, title, filename):
 
 if __name__ == "__main__":
 
-    modelname = "LJ"
+    modelname = "LJ_optuna_40"
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--inputfile", help="input file", type=str, default="./logs/LJ/config.json"
+        "--inputfile", help="input file", type=str, default="./logs/LJ_optuna_40/config.json"
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
@@ -171,7 +171,7 @@ if __name__ == "__main__":
     if args.format == "pickle":
         info("Pickle load")
         basedir = os.path.join(
-            os.path.dirname(__file__), "dataset", "%s.pickle" % modelname
+            os.path.dirname(__file__), "dataset", "%s.pickle" % datasetname
         )
         trainset = SimplePickleDataset(
             basedir=basedir,

@@ -39,11 +39,11 @@
             "output_heads": {
                 "node": {
                     "num_headlayers": 2, 
-                    "dim_headlayers": [60, 20], 
+                    "dim_headlayers": [20, 20], 
                     "type": "mlp"
                 }
             },
-            "task_weights": [1, 1]
+            "task_weights": [1.0, 1.0]
         },
         "Variables_of_interest": {
             "input_node_features": [0],
