@@ -18,14 +18,55 @@ from torch.nn import Identity, SiLU
 
 from torch_geometric.nn import Linear, Sequential
 from torch_geometric.nn.models.dimenet import (
-    BesselBasisLayer,
+    # BesselBasisLayer,
     InteractionPPBlock,
     OutputPPBlock,
     SphericalBasisLayer,
 )
 from torch_geometric.utils import scatter
+from torch_geometric.nn.inits import glorot_orthogonal
 
 from .Base import Base
+from hydragnn.utils.model.operations import get_edge_vectors_and_lengths
+
+
+from math import pi as PI
+class Envelope(torch.nn.Module):
+    def __init__(self, exponent: int):
+        super().__init__()
+        self.p = exponent + 1
+        self.a = -(self.p + 1) * (self.p + 2) / 2
+        self.b = self.p * (self.p + 2)
+        self.c = -self.p * (self.p + 1) / 2
+
+    def forward(self, x: Tensor) -> Tensor:
+        p, a, b, c = self.p, self.a, self.b, self.c
+        x_pow_p0 = x.pow(p - 1)
+        x_pow_p1 = x_pow_p0 * x
+        x_pow_p2 = x_pow_p1 * x
+        return (1.0 / x + a * x_pow_p0 + b * x_pow_p1 +
+                c * x_pow_p2) * (x < 1.0).to(x.dtype)
+
+class BesselBasisLayer(torch.nn.Module):
+    def __init__(self, num_radial: int, cutoff: float = 5.0,
+                 envelope_exponent: int = 5):
+        super().__init__()
+        self.cutoff = cutoff
+        self.eps = 1e-3
+        self.envelope = Envelope(envelope_exponent)
+
+        self.freq = torch.nn.Parameter(torch.empty(num_radial))
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        with torch.no_grad():
+            torch.arange(1, self.freq.numel() + 1, out=self.freq).mul_(PI)
+        self.freq.requires_grad_()
+
+    def forward(self, dist: Tensor) -> Tensor:
+        dist = dist.unsqueeze(-1) / self.cutoff
+        return self.envelope(dist) * (self.freq * dist).sin()
 
 
 class DIMEStack(Base):
@@ -36,6 +77,8 @@ class DIMEStack(Base):
 
     def __init__(
         self,
+        input_args,
+        conv_args,
         basis_emb_size,
         envelope_exponent,
         int_emb_size,
@@ -50,6 +93,11 @@ class DIMEStack(Base):
         max_neighbours: Optional[int] = None,
         **kwargs
     ):
+        # Add effect of pos to input dim
+        args = list(args)
+        args[0] = int(args[0]) + 3
+        args = tuple(args)
+        
         self.basis_emb_size = basis_emb_size
         self.int_emb_size = int_emb_size
         self.out_emb_size = out_emb_size
@@ -60,7 +108,7 @@ class DIMEStack(Base):
         self.edge_dim = edge_dim
         self.radius = radius
 
-        super().__init__(*args, **kwargs)
+        super().__init__(input_args, conv_args, *args, **kwargs)
 
         self.rbf = BesselBasisLayer(num_radial, radius, envelope_exponent)
         self.sbf = SphericalBasisLayer(
@@ -111,45 +159,66 @@ class DIMEStack(Base):
 
         if self.use_edge_attr:
             return Sequential(
-                "x, pos, rbf, edge_attr, sbf, i, j, idx_kj, idx_ji",
+                self.input_args,
                 [
-                    (lin, "x -> x"),
-                    (emb, "x, rbf, i, j, edge_attr -> x1"),
+                    (lin, "inv_node_feat -> inv_node_feat"),
+                    (emb, "inv_node_feat, rbf, i, j, edge_attr -> x1"),
                     (inter, "x1, rbf, sbf, idx_kj, idx_ji -> x2"),
-                    (dec, "x2, rbf, i -> c"),
-                    (lambda x, pos: [x, pos], "c, pos -> c, pos"),
+                    (dec, "x2, rbf, i -> inv_node_feat"),
+                    (
+                        lambda inv_node_feat, equiv_node_feat: [
+                            inv_node_feat,
+                            equiv_node_feat,
+                        ],
+                        "inv_node_feat, equiv_node_feat -> inv_node_feat, equiv_node_feat",
+                    ),
                 ],
             )
         else:
             return Sequential(
-                "x, pos, rbf, sbf, i, j, idx_kj, idx_ji",
+                self.input_args,
                 [
-                    (lin, "x -> x"),
-                    (emb, "x, rbf, i, j -> x1"),
+                    (lin, "inv_node_feat -> inv_node_feat"),
+                    (emb, "inv_node_feat, rbf, i, j -> x1"),
                     (inter, "x1, rbf, sbf, idx_kj, idx_ji -> x2"),
-                    (dec, "x2, rbf, i -> c"),
-                    (lambda x, pos: [x, pos], "c, pos -> c, pos"),
+                    (dec, "x2, rbf, i -> inv_node_feat"),
+                    (
+                        lambda x, pos: [x, pos],
+                        "inv_node_feat, equiv_node_feat -> inv_node_feat, equiv_node_feat",
+                    ),
                 ],
             )
 
-    def _conv_args(self, data):
+    def _embedding(self, data):
+        super()._embedding(data)
+
         assert (
             data.pos is not None
         ), "DimeNet requires node positions (data.pos) to be set."
+
+        # Calculate triplet indices
         i, j, idx_i, idx_j, idx_k, idx_kj, idx_ji = triplets(
             data.edge_index, num_nodes=data.x.size(0)
         )
-        dist = (data.pos[i] - data.pos[j]).pow(2).sum(dim=-1).sqrt()
 
-        # Calculate angles.
-        pos_i = data.pos[idx_i]
-        pos_ji, pos_ki = data.pos[idx_j] - pos_i, data.pos[idx_k] - pos_i
+        # Calculate edge_vec and edge_dist
+        edge_vec, edge_dist = get_edge_vectors_and_lengths(
+            data.pos, data.edge_index, data.edge_shifts
+        )
+        edge_dist = edge_dist.clamp(0.01*self.radius, self.radius-1e-2)
+
+        # Calculate angles
+        pos_ji = edge_vec[idx_ji]
+        pos_kj = edge_vec[idx_kj]
+        pos_ki = (
+            pos_kj + pos_ji
+        )  # It's important to calculate the vectors separately and then add in case of periodic boundary conditions
         a = (pos_ji * pos_ki).sum(dim=-1)
         b = torch.cross(pos_ji, pos_ki).norm(dim=-1)
         angle = torch.atan2(b, a)
 
-        rbf = self.rbf(dist)
-        sbf = self.sbf(dist, angle, idx_kj)
+        rbf = self.rbf(edge_dist.squeeze())
+        sbf = self.sbf(edge_dist.squeeze(), angle, idx_kj)
 
         conv_args = {
             "rbf": rbf,
@@ -164,9 +233,10 @@ class DIMEStack(Base):
             assert (
                 data.edge_attr is not None
             ), "Data must have edge attributes if use_edge_attributes is set."
-            conv_args.update({"edge_attr": data.edge_attr})
+            conv_args.update({"edge_attr": data.edge_shifts})
 
-        return conv_args
+        # return data.x, data.pos, conv_args
+        return torch.cat([data.x, data.pos], dim=-1), data.pos, conv_args
 
 
 """

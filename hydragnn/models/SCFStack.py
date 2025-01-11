@@ -18,7 +18,6 @@ from torch.nn import Identity, Linear, ReLU, Sequential
 from torch_geometric.nn import Sequential as PyGSeq
 from torch_geometric.nn import MessagePassing
 from torch_geometric.nn.models.schnet import (
-    CFConv,
     GaussianSmearing,
     RadiusInteractionGraph,
     ShiftedSoftplus,
@@ -27,11 +26,14 @@ from torch_geometric.nn.models.schnet import (
 from .Base import Base
 
 from hydragnn.utils.model import unsorted_segment_mean
+from hydragnn.utils.model.operations import get_edge_vectors_and_lengths
 
 
 class SCFStack(Base):
     def __init__(
         self,
+        input_args,
+        conv_args,
         num_filters: int,
         num_gaussians: list,
         radius: float,
@@ -39,12 +41,17 @@ class SCFStack(Base):
         max_neighbours: Optional[int] = None,
         **kwargs,
     ):
+        # Add effect of pos to input dim
+        args = list(args)
+        args[0] = int(args[0]) + 3
+        args = tuple(args)
+        
         self.radius = radius
         self.max_neighbours = max_neighbours
         self.num_filters = num_filters
         self.num_gaussians = num_gaussians
 
-        super().__init__(*args, **kwargs)
+        super().__init__(input_args, conv_args, *args, **kwargs)
 
         pass
 
@@ -83,45 +90,67 @@ class SCFStack(Base):
             equivariant=self.equivariance and not last_layer,
         )
 
-        conv_args = "x, edge_index, edge_weight, edge_attr, pos"
         if self.use_edge_attr:
-            input_args = "x, pos, edge_index, edge_weight, edge_attr"
             return PyGSeq(
-                input_args,
+                self.input_args,
                 [
-                    (interaction, conv_args + " -> x"),
-                    (lambda x, pos: [x, pos], "x, pos -> x, pos"),
+                    (interaction, self.conv_args + " -> inv_node_feat"),
+                    (
+                        lambda inv_node_feat, equiv_node_feat: [
+                            inv_node_feat,
+                            equiv_node_feat,
+                        ],
+                        "inv_node_feat, equiv_node_feat -> inv_node_feat, equiv_node_feat",
+                    ),
                 ],
             )
         elif self.equivariance and not last_layer:
-            input_args = "x, pos, batch"
             return PyGSeq(
-                input_args,
+                self.input_args,
                 [
-                    (self.interaction_graph, "pos, batch -> edge_index, edge_weight"),
+                    (
+                        self.interaction_graph,
+                        "equiv_node_feat, batch -> edge_index, edge_weight",
+                    ),
                     (self.distance_expansion, "edge_weight -> edge_attr"),
-                    (interaction, conv_args + " -> x, pos"),
+                    (
+                        interaction,
+                        self.conv_args + " -> inv_node_feat, equiv_node_feat",
+                    ),
                 ],
             )
         else:
-            input_args = "x, pos, batch"
             return PyGSeq(
-                input_args,
+                self.input_args,
                 [
-                    (self.interaction_graph, "pos, batch -> edge_index, edge_weight"),
+                    (
+                        self.interaction_graph,
+                        "equiv_node_feat, batch -> edge_index, edge_weight",
+                    ),
                     (self.distance_expansion, "edge_weight -> edge_attr"),
-                    (interaction, conv_args + " -> x"),
-                    (lambda x, pos: [x, pos], "x, pos -> x, pos"),
+                    (interaction, self.conv_args + " -> inv_node_feat"),
+                    (
+                        lambda inv_node_feat, equiv_node_feat: [
+                            inv_node_feat,
+                            equiv_node_feat,
+                        ],
+                        "inv_node_feat, equiv_node_feat -> inv_node_feat, equiv_node_feat",
+                    ),
                 ],
             )
 
-    def _conv_args(self, data):
+    def _embedding(self, data):
+        super()._embedding(data)
+
         if (self.use_edge_attr) and (self.equivariance):
             raise Exception(
                 "For SchNet if using edge attributes, then E(3)-equivariance cannot be ensured. Please disable equivariance or edge attributes."
             )
         elif self.use_edge_attr:
             edge_index = data.edge_index
+            data.edge_shifts = torch.zeros(
+                (data.edge_index.size(1), 3), device=data.edge_index.device
+            )  # Override. pbc edge shifts are currently not supported in positional update models
             edge_weight = data.edge_attr.norm(dim=-1)
 
             conv_args = {
@@ -134,7 +163,8 @@ class SCFStack(Base):
                 "batch": data.batch,
             }
 
-        return conv_args
+        # return data.x, data.pos, conv_args
+        return torch.cat((data.x, data.pos), dim=-1), data.pos, conv_args
 
     def __str__(self):
         return "SCFStack"
@@ -188,10 +218,10 @@ class CFConv(MessagePassing):
     def forward(
         self,
         x: Tensor,
+        pos: Tensor,
         edge_index: Tensor,
         edge_weight: Tensor,
         edge_attr: Tensor,
-        pos: Tensor,
     ) -> Tensor:
         C = 0.5 * (torch.cos(edge_weight * PI / self.cutoff) + 1.0)
         W = self.nn(edge_attr) * C.view(-1, 1)
@@ -199,7 +229,12 @@ class CFConv(MessagePassing):
         x = self.lin1(x)
 
         if self.equivariant:
-            radial, coord_diff = self.coord2radial(edge_index, pos)
+            edge_shifts = torch.zeros(
+                (edge_index.size(1), 3), device=edge_index.device
+            )  # pbc edge shifts are currently not supported in positional update models
+            coord_diff, radial = get_edge_vectors_and_lengths(
+                pos, edge_index, edge_shifts, normalize=True, eps=1.0
+            )
             pos = self.coord_model(pos, edge_index, coord_diff, W)
 
         x = self.propagate(edge_index, x=x, W=W)
@@ -211,13 +246,3 @@ class CFConv(MessagePassing):
 
     def message(self, x_j: Tensor, W: Tensor) -> Tensor:
         return x_j * W
-
-    def coord2radial(self, edge_index, coord):
-        row, col = edge_index
-        coord_diff = coord[row] - coord[col]
-        radial = torch.sum((coord_diff) ** 2, 1).unsqueeze(1)
-
-        norm = torch.sqrt(radial) + 1
-        coord_diff = coord_diff / (norm)
-
-        return radial, coord_diff

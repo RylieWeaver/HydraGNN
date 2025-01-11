@@ -63,7 +63,7 @@ if __name__ == "__main__":
         action="store_true",
         help="preprocess only (no training)",
     )
-    parser.add_argument("--inputfile", help="input file", type=str, default="LJ.json")
+    parser.add_argument("--inputfile", help="input file", type=str, default="LJ_multitask.json")
     parser.add_argument("--model_type", help="model type", type=str, default=None)
     parser.add_argument("--mae", action="store_true", help="do mae calculation")
     parser.add_argument("--ddstore", action="store_true", help="ddstore dataset")
@@ -93,8 +93,8 @@ if __name__ == "__main__":
 
     graph_feature_names = ["total_energy"]
     graph_feature_dims = [1]
-    node_feature_names = ["atomic_number", "potential", "forces"]
-    node_feature_dims = [1, 1, 3]
+    node_feature_names = ["atomic_number", "pos", "forces"]
+    node_feature_dims = [1, 3, 3]
     dirpwd = os.path.dirname(os.path.abspath(__file__))
     ##################################################################################################################
     input_filename = os.path.join(dirpwd, args.inputfile)
@@ -240,7 +240,7 @@ if __name__ == "__main__":
         info("Pickle load")
         var_config = config["NeuralNetwork"]["Variables_of_interest"]
         trainset = SimplePickleDataset(
-            basedir=basedir, label="trainset", preload=True, var_config=var_config
+            basedir=basedir, label="trainset", preload=False, var_config=var_config
         )
         valset = SimplePickleDataset(
             basedir=basedir, label="valset", var_config=var_config
@@ -315,7 +315,7 @@ if __name__ == "__main__":
         log_name,
         verbosity,
         create_plots=False,
-        compute_grad_energy=True,
+        compute_grad_energy=False,
     )
 
     hydragnn.utils.model.save_model(model, optimizer, log_name)

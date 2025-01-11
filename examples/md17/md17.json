@@ -1,50 +1,78 @@
 {
     "Verbosity": {
-        "level": 2
+      "level": 2
+    },
+    "Dataset": {
+      "name": "LJdataset",
+      "format": "XYZ",
+      "node_features": {
+        "name": ["atom_type"],
+        "dim": [1],
+        "column_index": [0]
+      },
+      "graph_features":{
+        "name": ["total_energy"],
+        "dim": [1],
+        "column_index": [0]
+      }
     },
     "NeuralNetwork": {
-        "Profile": {"enable": 1},
-        "Architecture": {
-            "model_type": "GIN",
-            "radius": 7,
-            "max_neighbours": 5,
-            "periodic_boundary_conditions": false,
-            "hidden_dim": 5,
-            "num_conv_layers": 6,
-            "output_heads": {
-                "graph":{
-                    "num_sharedlayers": 2,
-                    "dim_sharedlayers": 5,
-                    "num_headlayers": 2,
-                    "dim_headlayers": [50,25]
-                }
-            },
-            "task_weights": [1.0]
+      "Architecture": {
+        "periodic_boundary_conditions": true,
+        "model_type": "PNA",
+        "radius": 5.0,
+        "max_neighbours": 5,
+        "int_emb_size": 8,
+        "out_emb_size": 8,
+        "basis_emb_size": 8,
+        "num_gaussians": 6,
+        "num_filters": 6,
+        "num_before_skip": 1,
+        "num_after_skip": 1,
+        "envelope_exponent": 5,
+        "num_radial": 5,
+        "num_spherical": 3,
+        "max_ell": 1,
+        "node_max_ell": 1,
+        "hidden_dim": 50,
+        "num_conv_layers": 2,
+        "output_heads": {
+          "node": {
+            "num_headlayers": 2,
+            "dim_headlayers": [25,25],
+            "type": "mlp"
+          }
         },
-        "Variables_of_interest": {
-            "input_node_features": [0],
-            "output_names": ["energy"],
-            "output_index": [0],
-            "output_dim": [1],
-            "type": ["graph"],
-            "denormalize_output": false
+        "task_weights": [1]
+      },
+      "Variables_of_interest": {
+        "input_node_features": [0],
+        "output_index": [
+          0
+        ],
+        "type": [
+          "node"
+        ],
+        "output_dim": [1],
+        "output_names": ["graph_property_per_node"]
+      },
+      "Training": {
+        "num_epoch": 300,
+        "batch_size": 16,
+        "perc_train": 0.8,
+        "EarlyStopping": true,
+        "patience": 25,
+        "Optimizer": {
+          "type": "Adam",
+          "learning_rate": 0.0001
         },
-        "Training": {
-            "num_epoch": 2,
-            "perc_train": 0.7,
-            "loss_function_type": "mse",
-            "batch_size": 64,
-            "continue": 0,
-            "startfrom": "existing_model",
-            "Optimizer":{
-                "type": "AdamW",
-                "learning_rate": 1e-3
-            }
-        }
-     },
+        "conv_checkpointing": false
+      }
+    },
     "Visualization": {
-        "plot_init_solution": true,
-        "plot_hist_solution": false,
-        "create_plots": true
-    }
-}
+      "plot_init_solution": true,
+      "plot_hist_solution": true,
+      "create_plots": true
+   }
+  }
+  

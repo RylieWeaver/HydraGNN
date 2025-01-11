@@ -32,7 +32,9 @@ from torch_geometric.nn.dense.linear import Linear as geom_Linear
 from torch_geometric.nn.aggr.scaler import DegreeScalerAggregation
 from torch_geometric.typing import Adj, OptTensor
 
+# HydraGNN
 from .Base import Base
+from hydragnn.utils.model.operations import get_edge_vectors_and_lengths
 
 
 class PNAEqStack(Base):
@@ -42,8 +44,20 @@ class PNAEqStack(Base):
     """
 
     def __init__(
-        self, deg: list, edge_dim: int, num_radial: int, radius: float, *args, **kwargs
+        self,
+        input_args,
+        conv_args,
+        deg: list,
+        edge_dim: int,
+        num_radial: int,
+        radius: float,
+        *args,
+        **kwargs,
     ):
+        # Add effect of pos to input dim
+        args = list(args)
+        args[0] = int(args[0]) + 3
+        args = tuple(args)
 
         self.x_aggregators = ["mean", "min", "max", "std"]
         self.x_scalers = [
@@ -58,7 +72,7 @@ class PNAEqStack(Base):
         self.num_radial = num_radial
         self.radius = radius
 
-        super().__init__(*args, **kwargs)
+        super().__init__(input_args, conv_args, *args, **kwargs)
 
         self.rbf = rbf_BasisLayer(self.num_radial, self.radius)
 
@@ -90,8 +104,8 @@ class PNAEqStack(Base):
         )
         update = PainnUpdate(node_size=input_dim, last_layer=last_layer)
         """
-        The following linear layers are to get the correct sizing of embeddings. This is 
-        necessary to use the hidden_dim, output_dim of HYDRAGNN's stacked conv layers correctly 
+        The following linear layers are to get the correct sizing of embeddings. This is
+        necessary to use the hidden_dim, output_dim of HYDRAGNN's stacked conv layers correctly
         because node_scalar and node-vector are updated through an additive skip connection.
         """
         # Embed down to output size
@@ -104,113 +118,81 @@ class PNAEqStack(Base):
             geom_nn.Linear(input_dim, output_dim) if not last_layer else None
         )
 
-        input_args = "x, v, pos, edge_index, edge_rbf, edge_vec"
-        conv_args = "x, v, edge_index, edge_rbf, edge_vec"
-
-        if self.use_edge_attr:
-            input_args += ", edge_attr"
-            conv_args += ", edge_attr"
-
         if not last_layer:
             return geom_nn.Sequential(
-                input_args,
+                self.input_args,
                 [
-                    (message, conv_args + " -> x, v"),
-                    (update, "x, v -> x, v"),
-                    (node_embed_out, "x -> x"),
-                    (vec_embed_out, "v -> v"),
-                    (lambda x, v, pos: [x, v, pos], "x, v, pos -> x, v, pos"),
+                    (message, self.conv_args + " -> inv_node_feat, equiv_node_feat"),
+                    (
+                        update,
+                        "inv_node_feat, equiv_node_feat -> inv_node_feat, equiv_node_feat",
+                    ),
+                    (node_embed_out, "inv_node_feat -> inv_node_feat"),
+                    (vec_embed_out, "equiv_node_feat -> equiv_node_feat"),
+                    (
+                        lambda inv_node_feat, equiv_node_feat: [
+                            inv_node_feat,
+                            equiv_node_feat,
+                        ],
+                        "inv_node_feat, equiv_node_feat -> inv_node_feat, equiv_node_feat",
+                    ),
                 ],
             )
         else:
             return geom_nn.Sequential(
-                input_args,
+                self.input_args,
                 [
-                    (message, conv_args + " -> x, v"),
+                    (message, self.conv_args + " -> inv_node_feat, equiv_node_feat"),
                     (
                         update,
-                        "x, v -> x",
+                        "inv_node_feat, equiv_node_feat -> inv_node_feat",
                     ),  # v is not updated in the last layer to avoid hanging gradients
                     (
                         node_embed_out,
-                        "x -> x",
+                        "inv_node_feat -> inv_node_feat",
                     ),  # No need to embed down v because it's not used anymore
-                    (lambda x, v, pos: [x, v, pos], "x, v, pos -> x, v, pos"),
+                    (
+                        lambda inv_node_feat, equiv_node_feat: [
+                            inv_node_feat,
+                            equiv_node_feat,
+                        ],
+                        "inv_node_feat, equiv_node_feat -> inv_node_feat, equiv_node_feat",
+                    ),
                 ],
             )
 
-    def forward(self, data):
-        data, conv_args = self._conv_args(
-            data
-        )  # Added v to data here (necessary for PNAEq Stack)
-        x = data.x
-        v = data.v
-        pos = data.pos
+    def _embedding(self, data):
+        super()._embedding(data)
 
-        ### encoder part ####
-        for conv, feat_layer in zip(self.graph_convs, self.feature_layers):
-            if not self.conv_checkpointing:
-                c, v, pos = conv(x=x, v=v, pos=pos, **conv_args)  # Added v here
-            else:
-                c, v, pos = checkpoint(  # Added v here
-                    conv, use_reentrant=False, x=x, v=v, pos=pos, **conv_args
-                )
-            x = self.activation_function(feat_layer(c))
-
-        #### multi-head decoder part####
-        # shared dense layers for graph level output
-        if data.batch is None:
-            x_graph = x.mean(dim=0, keepdim=True)
-        else:
-            x_graph = geom_nn.global_mean_pool(x, data.batch.to(x.device))
-        outputs = []
-        outputs_var = []
-        for head_dim, headloc, type_head in zip(
-            self.head_dims, self.heads_NN, self.head_type
-        ):
-            if type_head == "graph":
-                x_graph_head = self.graph_shared(x_graph)
-                output_head = headloc(x_graph_head)
-                outputs.append(output_head[:, :head_dim])
-                outputs_var.append(output_head[:, head_dim:] ** 2)
-            else:
-                if self.node_NN_type == "conv":
-                    for conv, batch_norm in zip(headloc[0::2], headloc[1::2]):
-                        c, v, pos = conv(x=x, v=v, pos=pos, **conv_args)
-                        c = batch_norm(c)
-                        x = self.activation_function(c)
-                    x_node = x
-                else:
-                    x_node = headloc(x=x, batch=data.batch)
-                outputs.append(x_node[:, :head_dim])
-                outputs_var.append(x_node[:, head_dim:] ** 2)
-        if self.var_output:
-            return outputs, outputs_var
-        return outputs
-
-    def _conv_args(self, data):
         assert (
             data.pos is not None
         ), "PNAEq requires node positions (data.pos) to be set."
 
-        # Calculate relative vectors and distances
-        i, j = data.edge_index[0], data.edge_index[1]
-        diff = data.pos[i] - data.pos[j]
-        dist = diff.pow(2).sum(dim=-1).sqrt()
-        rbf = self.rbf(dist)
-        norm_diff = diff / dist.unsqueeze(-1)
+        # Edge vector and distance features
+        norm_edge_vec, edge_dist = get_edge_vectors_and_lengths(
+            data.pos, data.edge_index, data.edge_shifts, normalize=True
+        )
+        edge_dist = edge_dist.clamp(0.001*self.radius, self.radius-1e-2)
+        rbf = self.rbf(edge_dist.squeeze())
 
         # Instantiate tensor to hold equivariant traits
-        v = torch.zeros(data.x.size(0), 3, data.x.size(1), device=data.x.device)
+        v = torch.zeros(data.x.size(0), 3, data.x.size(1)+3, device=data.x.device)
         data.v = v
 
         conv_args = {
             "edge_index": data.edge_index.t().to(torch.long),
             "edge_rbf": rbf,
-            "edge_vec": norm_diff,
+            "edge_vec": norm_edge_vec,
         }
 
-        return data, conv_args
+        if self.use_edge_attr:
+            assert (
+                data.edge_attr is not None
+            ), "Data must have edge attributes if use_edge_attributes is set."
+            conv_args.update({"edge_attr": data.edge_shifts})
+
+        # return data.x, data.v, conv_args
+        return torch.cat((data.x, data.pos), dim=-1), data.v, conv_args
 
 
 class PainnMessage(MessagePassing):
@@ -241,7 +223,7 @@ class PainnMessage(MessagePassing):
         self.node_size = node_size  # We keep input and output dim the same here because of the skip connection
         self.x_aggregators = x_aggregators
         self.x_scalers = x_scalers
-        self.deg = deg
+        self.deg = torch.Tensor(deg)
         self.num_radial = num_radial
         self.edge_dim = edge_dim
 
@@ -363,10 +345,11 @@ class PainnMessage(MessagePassing):
             aggr=self.x_aggregators, scaler=self.x_scalers, deg=self.deg
         )
         message_scalar = degree_scaler_aggregation(
-            message_scalar.squeeze(1), index=src, dim_size=x.shape[0]
+            message_scalar.squeeze(1).to(self.deg.device), index=src.to(self.deg.device), dim_size=x.shape[0]
         ).unsqueeze(
             1
         )  # degree scalar aggregation expects shape(num_nodes, feature_dim)
+        message_scalar = message_scalar.to(x.device)
         message_scalar = torch.cat([x, message_scalar], dim=-1)
         delta_x = [nn(message_scalar[:, i]) for i, nn in enumerate(self.post_nns)]
         delta_x = torch.stack(delta_x, dim=1)
@@ -450,6 +433,7 @@ class rbf_BasisLayer(nn.Module):
         super().__init__()
         self.num_radial = num_radial
         self.cutoff = cutoff
+        self.eps=1e-3
 
     def sinc_expansion(self, edge_dist: torch.Tensor) -> torch.Tensor:
         """
@@ -459,7 +443,7 @@ class rbf_BasisLayer(nn.Module):
         """
         n = torch.arange(self.num_radial, device=edge_dist.device) + 1
         return torch.sin(
-            edge_dist.unsqueeze(-1) * n * torch.pi / self.cutoff
+            (edge_dist.unsqueeze(-1) * n * torch.pi / self.cutoff)
         ) / edge_dist.unsqueeze(-1)
 
     def cosine_cutoff(self, edge_dist: torch.Tensor) -> torch.Tensor:

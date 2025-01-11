@@ -19,8 +19,27 @@ from .Base import Base
 
 
 class SAGEStack(Base):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, input_args, conv_args, *args, **kwargs):
+        # Add effect of pos to input dim
+        args = list(args)
+        args[0] = int(args[0]) + 3
+        args = tuple(args)
+        
+        super().__init__(input_args, conv_args, *args, **kwargs)
+        
+    def _embedding(self, data):
+        if not hasattr(data, "edge_shifts"):
+            data.edge_shifts = torch.zeros(
+                (data.edge_index.size(1), 3), device=data.edge_index.device
+            )
+        conv_args = {"edge_index": data.edge_index.to(torch.long)}
+        if self.use_edge_attr:
+            assert (
+                data.edge_attr is not None
+            ), "Data must have edge attributes if use_edge_attributes is set."
+            conv_args.update({"edge_attr": data.edge_attr})
+        return torch.cat((data.x, data.pos), dim=-1), data.pos, conv_args
+        # return data.x, data.pos, conv_args
 
     def get_conv(self, input_dim, output_dim):
         sage = SAGEConv(
@@ -28,14 +47,17 @@ class SAGEStack(Base):
             out_channels=output_dim,
         )
 
-        input_args = "x, pos, edge_index"
-        conv_args = "x, edge_index"
-
         return Sequential(
-            input_args,
+            self.input_args,
             [
-                (sage, conv_args + " -> x"),
-                (lambda x, pos: [x, pos], "x, pos -> x, pos"),
+                (sage, self.conv_args + " -> inv_node_feat"),
+                (
+                    lambda inv_node_feat, equiv_node_feat: [
+                        inv_node_feat,
+                        equiv_node_feat,
+                    ],
+                    "inv_node_feat, equiv_node_feat -> inv_node_feat, equiv_node_feat",
+                ),
             ],
         )
 

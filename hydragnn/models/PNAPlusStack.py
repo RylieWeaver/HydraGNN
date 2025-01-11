@@ -29,16 +29,58 @@ from torch_geometric.nn.inits import reset
 from torch_geometric.nn.resolver import activation_resolver
 from torch_geometric.typing import Adj, OptTensor
 from torch_geometric.utils import degree
-from torch_geometric.nn.models.dimenet import BesselBasisLayer
+# from torch_geometric.nn.models.dimenet import BesselBasisLayer
 from torch_geometric.typing import Adj
 
 # HydraGNN
 from .Base import Base
+from hydragnn.utils.model.operations import get_edge_vectors_and_lengths
+
+
+from math import pi as PI
+class Envelope(torch.nn.Module):
+    def __init__(self, exponent: int):
+        super().__init__()
+        self.p = exponent + 1
+        self.a = -(self.p + 1) * (self.p + 2) / 2
+        self.b = self.p * (self.p + 2)
+        self.c = -self.p * (self.p + 1) / 2
+
+    def forward(self, x: Tensor) -> Tensor:
+        p, a, b, c = self.p, self.a, self.b, self.c
+        x_pow_p0 = x.pow(p - 1)
+        x_pow_p1 = x_pow_p0 * x
+        x_pow_p2 = x_pow_p1 * x
+        return (1.0 / x + a * x_pow_p0 + b * x_pow_p1 +
+                c * x_pow_p2) * (x < 1.0).to(x.dtype)
+
+class BesselBasisLayer(torch.nn.Module):
+    def __init__(self, num_radial: int, cutoff: float = 5.0,
+                 envelope_exponent: int = 5):
+        super().__init__()
+        self.cutoff = cutoff
+        self.eps = 1e-3
+        self.envelope = Envelope(envelope_exponent)
+
+        self.freq = torch.nn.Parameter(torch.empty(num_radial))
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        with torch.no_grad():
+            torch.arange(1, self.freq.numel() + 1, out=self.freq).mul_(PI)
+        self.freq.requires_grad_()
+
+    def forward(self, dist: Tensor) -> Tensor:
+        dist = dist.unsqueeze(-1) / self.cutoff
+        return self.envelope(dist) * (self.freq * dist).sin()
 
 
 class PNAPlusStack(Base):
     def __init__(
         self,
+        input_args,
+        conv_args,
         deg: list,
         edge_dim: int,
         envelope_exponent: int,
@@ -47,6 +89,10 @@ class PNAPlusStack(Base):
         *args,
         **kwargs,
     ):
+        # Add effect of pos to input dim
+        args = list(args)
+        args[0] = int(args[0]) + 3
+        args = tuple(args)
 
         self.aggregators = ["mean", "min", "max", "std"]
         self.scalers = [
@@ -61,7 +107,7 @@ class PNAPlusStack(Base):
         self.num_radial = num_radial
         self.radius = radius
 
-        super().__init__(*args, **kwargs)
+        super().__init__(input_args, conv_args, *args, **kwargs)
 
         self.rbf = BesselBasisLayer(
             self.num_radial, self.radius, self.envelope_exponent
@@ -81,39 +127,44 @@ class PNAPlusStack(Base):
             divide_input=False,
         )
 
-        input_args = "x, pos, edge_index, rbf"
-        conv_args = "x, edge_index, rbf"
-
-        if self.use_edge_attr:
-            input_args += ", edge_attr"
-            conv_args += ", edge_attr"
-
         return PyGSequential(
-            input_args,
+            self.input_args,
             [
-                (pna, conv_args + " -> x"),
-                (lambda x, pos: [x, pos], "x, pos -> x, pos"),
+                (pna, self.conv_args + " -> inv_node_feat"),
+                (
+                    lambda inv_node_feat, equiv_node_feat: [
+                        inv_node_feat,
+                        equiv_node_feat,
+                    ],
+                    "inv_node_feat, equiv_node_feat -> inv_node_feat, equiv_node_feat",
+                ),
             ],
         )
 
-    def _conv_args(self, data):
+    def _embedding(self, data):
+        super()._embedding(data)
+
         assert (
             data.pos is not None
         ), "PNA+ requires node positions (data.pos) to be set."
 
-        j, i = data.edge_index  # j->i
-        dist = (data.pos[i] - data.pos[j]).pow(2).sum(dim=-1).sqrt()
-        rbf = self.rbf(dist)
-        # rbf = dist.unsqueeze(-1)
+        # Radial embedding
+        _, edge_dist = get_edge_vectors_and_lengths(
+            data.pos, data.edge_index, data.edge_shifts
+        )
+        edge_dist = edge_dist.clamp(0.001*self.radius, self.radius-1e-2)
+        rbf = self.rbf(edge_dist.squeeze())
+
         conv_args = {"edge_index": data.edge_index.to(torch.long), "rbf": rbf}
 
         if self.use_edge_attr:
             assert (
                 data.edge_attr is not None
             ), "Data must have edge attributes if use_edge_attributes is set."
-            conv_args.update({"edge_attr": data.edge_attr})
+            conv_args.update({"edge_attr": data.edge_shifts})
 
-        return conv_args
+        # return data.x, data.pos, conv_args
+        return torch.cat((data.x, data.pos), dim=-1), data.pos, conv_args
 
     def __str__(self):
         return "PNAStack"

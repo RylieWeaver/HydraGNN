@@ -19,12 +19,15 @@ from .Base import Base
 class CGCNNStack(Base):
     def __init__(
         self,
+        input_args,
+        conv_args,
         edge_dim: int,
         input_dim,
         output_dim,
         *args,
         **kwargs,
     ):
+        input_dim += 3
         self.edge_dim = edge_dim
 
         # CGCNN does not change embedding dimensions
@@ -32,12 +35,38 @@ class CGCNNStack(Base):
         #    also as hidden dimension (second argument of base constructor)
         # We therefore pass all required args explicitly.
         super().__init__(
+            input_args,
+            conv_args,
             input_dim,
             input_dim,
             output_dim,
             *args,
             **kwargs,
         )
+
+        if self.use_edge_attr:
+            assert (
+                self.input_args
+                == "inv_node_feat, equiv_node_feat, edge_index, edge_attr"
+            )
+            assert self.conv_args == "inv_node_feat, edge_index, edge_attr"
+        else:
+            assert self.input_args == "inv_node_feat, equiv_node_feat, edge_index"
+            assert self.conv_args == "inv_node_feat, edge_index"
+            
+    def _embedding(self, data):
+        if not hasattr(data, "edge_shifts"):
+            data.edge_shifts = torch.zeros(
+                (data.edge_index.size(1), 3), device=data.edge_index.device
+            )
+        conv_args = {"edge_index": data.edge_index.to(torch.long)}
+        if self.use_edge_attr:
+            assert (
+                data.edge_attr is not None
+            ), "Data must have edge attributes if use_edge_attributes is set."
+            conv_args.update({"edge_attr": data.edge_attr})
+        return torch.cat((data.x, data.pos), dim=-1), data.pos, conv_args
+        # return data.x, data.pos, conv_args
 
     def get_conv(self, input_dim, _):
         cgcnn = CGConv(
@@ -48,18 +77,17 @@ class CGCNNStack(Base):
             bias=True,
         )
 
-        input_args = "x, pos, edge_index"
-        conv_args = "x, edge_index"
-
-        if self.use_edge_attr:
-            input_args += ", edge_attr"
-            conv_args += ", edge_attr"
-
         return Sequential(
-            input_args,
+            self.input_args,
             [
-                (cgcnn, conv_args + " -> x"),
-                (lambda x, pos: [x, pos], "x, pos -> x, pos"),
+                (cgcnn, self.conv_args + " -> inv_node_feat"),
+                (
+                    lambda inv_node_feat, equiv_node_feat: [
+                        inv_node_feat,
+                        equiv_node_feat,
+                    ],
+                    "inv_node_feat, equiv_node_feat -> inv_node_feat, equiv_node_feat",
+                ),
             ],
         )
 

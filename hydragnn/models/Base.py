@@ -20,6 +20,7 @@ from hydragnn.utils.model import activation_function_selection, loss_function_se
 import sys
 from hydragnn.utils.distributed import get_device
 from hydragnn.utils.print.print_utils import print_master
+from hydragnn.utils.model.operations import get_edge_vectors_and_lengths
 
 import inspect
 
@@ -27,6 +28,8 @@ import inspect
 class Base(Module):
     def __init__(
         self,
+        input_args: str,
+        conv_args: str,
         input_dim: int,
         hidden_dim: int,
         output_dim: list,
@@ -46,6 +49,8 @@ class Base(Module):
     ):
         super().__init__()
         self.device = get_device()
+        self.input_args = input_args
+        self.conv_args = conv_args
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.dropout = dropout
@@ -104,6 +109,10 @@ class Base(Module):
             and self.edge_dim > 0
         ):
             self.use_edge_attr = True
+            if "edge_attr" not in self.input_args:
+                self.input_args += ", edge_attr"
+            if "edge_attr" not in self.conv_args:
+                self.conv_args += ", edge_attr"
 
         # Option to only train final property layers.
         self.freeze_conv = freeze_conv
@@ -127,14 +136,18 @@ class Base(Module):
             self.graph_convs.append(conv)
             self.feature_layers.append(BatchNorm(self.hidden_dim))
 
-    def _conv_args(self, data):
+    def _embedding(self, data):
+        if not hasattr(data, "edge_shifts"):
+            data.edge_shifts = torch.zeros(
+                (data.edge_index.size(1), 3), device=data.edge_index.device
+            )
         conv_args = {"edge_index": data.edge_index.to(torch.long)}
         if self.use_edge_attr:
             assert (
                 data.edge_attr is not None
             ), "Data must have edge attributes if use_edge_attributes is set."
-            conv_args.update({"edge_attr": data.edge_attr})
-        return conv_args
+            conv_args.update({"edge_attr": data.edge_shifts})
+        return data.x, data.pos, conv_args
 
     def _freeze_conv(self):
         for module in [self.graph_convs, self.feature_layers]:
@@ -301,19 +314,27 @@ class Base(Module):
         self.conv_checkpointing = True
 
     def forward(self, data):
-        x = data.x
-        pos = data.pos
-
         ### encoder part ####
-        conv_args = self._conv_args(data)
+        inv_node_feat, equiv_node_feat, conv_args = self._embedding(data)
+
         for conv, feat_layer in zip(self.graph_convs, self.feature_layers):
             if not self.conv_checkpointing:
-                c, pos = conv(x=x, pos=pos, **conv_args)
-            else:
-                c, pos = checkpoint(
-                    conv, use_reentrant=False, x=x, pos=pos, **conv_args
+                inv_node_feat, equiv_node_feat = conv(
+                    inv_node_feat=inv_node_feat,
+                    equiv_node_feat=equiv_node_feat,
+                    **conv_args
                 )
-            x = self.activation_function(feat_layer(c))
+            else:
+                inv_node_feat, equiv_node_feat = checkpoint(
+                    conv,
+                    use_reentrant=False,
+                    inv_node_feat=inv_node_feat,
+                    equiv_node_feat=equiv_node_feat,
+                    **conv_args
+                )
+            inv_node_feat = self.activation_function(feat_layer(inv_node_feat))
+
+        x = inv_node_feat
 
         #### multi-head decoder part####
         # shared dense layers for graph level output
@@ -333,11 +354,17 @@ class Base(Module):
                 outputs_var.append(output_head[:, head_dim:] ** 2)
             else:
                 if self.node_NN_type == "conv":
+                    inv_node_feat = x
                     for conv, batch_norm in zip(headloc[0::2], headloc[1::2]):
-                        c, pos = conv(x=x, pos=pos, **conv_args)
-                        c = batch_norm(c)
-                        x = self.activation_function(c)
-                    x_node = x
+                        inv_node_feat, equiv_node_feat = conv(
+                            inv_node_feat=inv_node_feat,
+                            equiv_node_feat=equiv_node_feat,
+                            **conv_args
+                        )
+                        inv_node_feat = batch_norm(inv_node_feat)
+                        inv_node_feat = self.activation_function(inv_node_feat)
+                    x_node = inv_node_feat
+                    x = inv_node_feat
                 else:
                     x_node = headloc(x=x, batch=data.batch)
                 outputs.append(x_node[:, :head_dim])
@@ -430,35 +457,75 @@ class Base(Module):
             tasks_mseloss.append(F.mse_loss(head_pre, head_val))
 
         return nll_loss, tasks_mseloss, []
-
+    
     def loss_hpweighted(self, pred, value, head_index, var=None):
-        # weights for different tasks as hyper-parameters
-        tot_loss = 0
-        tasks_loss = []
+        # Compute batch-specific task weights
+        # energy_mean = torch.mean(torch.abs(value[head_index[0]])).item()  # Mean of energy task
+        # force_mean = torch.mean(torch.abs(value[head_index[1]].flatten())).item()  # Mean of force task
+
+        # energy_loss_weight = self.loss_weights[0]  # Fixed energy weight
+        # force_loss_weight = self.loss_weights[1] * (energy_mean / (force_mean + 1e-8))  # Dynamic force weight
+        energy_loss_weight, force_loss_weight = self.loss_weights  # Fixed energy weight and dynamic force weight
+
+        tot_loss = 0  # Total weighted loss
+        tasks_loss = []  # Individual task losses
+
         for ihead in range(self.num_heads):
             head_pre = pred[ihead]
             pred_shape = head_pre.shape
             head_val = value[head_index[ihead]]
             value_shape = head_val.shape
+
+            # Adjust shapes if needed
             if pred_shape != value_shape:
                 head_val = torch.reshape(head_val, pred_shape)
+
+
             if var is None:
                 assert (
                     self.loss_function_type != "GaussianNLLLoss"
                 ), "Expecting var for GaussianNLLLoss, but got None"
-                tot_loss += (
-                    self.loss_function(head_pre, head_val) * self.loss_weights[ihead]
-                )
+                # Compute weighted loss
+                task_loss = self.loss_function(head_pre, head_val) * self.loss_weights[ihead]
+                tot_loss += task_loss
                 tasks_loss.append(self.loss_function(head_pre, head_val))
             else:
                 head_var = var[ihead]
-                tot_loss += (
-                    self.loss_function(head_pre, head_val, head_var)
-                    * self.loss_weights[ihead]
-                )
+                task_loss = self.loss_function(head_pre, head_val, head_var) * self.loss_weights[ihead]
+                tot_loss += task_loss
                 tasks_loss.append(self.loss_function(head_pre, head_val, head_var))
 
         return tot_loss, tasks_loss
+
+
+    # def loss_hpweighted(self, pred, value, head_index, var=None):
+    #     # weights for different tasks as hyper-parameters
+    #     tot_loss = 0
+    #     tasks_loss = []
+    #     for ihead in range(self.num_heads):
+    #         head_pre = pred[ihead]
+    #         pred_shape = head_pre.shape
+    #         head_val = value[head_index[ihead]]
+    #         value_shape = head_val.shape
+    #         if pred_shape != value_shape:
+    #             head_val = torch.reshape(head_val, pred_shape)
+    #         if var is None:
+    #             assert (
+    #                 self.loss_function_type != "GaussianNLLLoss"
+    #             ), "Expecting var for GaussianNLLLoss, but got None"
+    #             tot_loss += (
+    #                 self.loss_function(head_pre, head_val) * self.loss_weights[ihead]
+    #             )
+    #             tasks_loss.append(self.loss_function(head_pre, head_val))
+    #         else:
+    #             head_var = var[ihead]
+    #             tot_loss += (
+    #                 self.loss_function(head_pre, head_val, head_var)
+    #                 * self.loss_weights[ihead]
+    #             )
+    #             tasks_loss.append(self.loss_function(head_pre, head_val, head_var))
+
+    #     return tot_loss, tasks_loss
 
     def __str__(self):
         return "Base"

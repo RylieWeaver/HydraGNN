@@ -1,6 +1,7 @@
 import os, json
 
 import torch
+torch.cuda.empty_cache()
 
 # FIX random seed
 random_state = 0
@@ -20,17 +21,20 @@ import hydragnn
 def md17_pre_transform(data):
     # Set descriptor as element type.
     data.x = data.z.float().view(-1, 1)
+    # data.x = torch.cat([data.z.float().view(-1, 1), data.pos, data.force], dim=1)
     # Only predict energy (index 0 of 2 properties) for this run.
-    data.y = data.energy / len(data.x)
+    # data.y = data.energy / len(data.x)
+    data.y = data.energy
     graph_features_dim = [1]
-    node_feature_dim = [1]
+    node_feature_dim = [1, 3]
     data = compute_edges(data)
+    data.y_loc = torch.tensor([[0, 1, 3*data.num_nodes+1]])
     return data
 
 
 # Randomly select ~1000 samples
 def md17_pre_filter(data):
-    return torch.rand(1) < 0.25
+    return torch.rand(1) < 0.01
 
 
 # Set this path for output.
@@ -40,7 +44,7 @@ except:
     os.environ["SERIALIZED_DATA_PATH"] = os.getcwd()
 
 # Configurable run choices (JSON file that accompanies this example script).
-filename = os.path.join(os.path.dirname(__file__), "md17.json")
+filename = os.path.join(os.path.dirname(__file__), "md17_multitask.json")
 with open(filename, "r") as f:
     config = json.load(f)
 verbosity = config["Verbosity"]["level"]
