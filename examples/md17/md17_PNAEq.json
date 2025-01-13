@@ -5,7 +5,9 @@
     "NeuralNetwork": {
         "Profile": {"enable": 1},
         "Architecture": {
-            "model_type": "DimeNet",
+            "global_attn_engine": "",
+            "global_attn_type": "",
+            "mpnn_type": "DimeNet",
             "radius": 7,
             "max_neighbours": 5,
             "num_radial": 5,

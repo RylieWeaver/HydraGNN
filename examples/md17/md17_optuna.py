@@ -262,7 +262,7 @@ if __name__ == "__main__":
 
         # Split dataset
         train, val, test = hydragnn.preprocess.split_dataset(
-            dataset, config["NeuralNetwork"]["Training"]["perc_train"]
+            dataset, config["NeuralNetwork"]["Training"]["perc_train"], False
         )
         # Save the raw splits
         save_dataset(path, train, "train")
@@ -328,7 +328,7 @@ if __name__ == "__main__":
     # Create a study object and run the optimization
     study = optuna.create_study(direction="minimize", sampler=sampler)
     # You can adjust n_jobs for parallel trials (local concurrency)
-    study.optimize(objective, n_trials=50, n_jobs=4)
+    study.optimize(objective, n_trials=50, n_jobs=1)
 
     # Store info about the best trial
     best_trial_info = pd.Series(

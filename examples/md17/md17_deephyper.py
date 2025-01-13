@@ -37,8 +37,6 @@ def md17_pre_transform(data, compute_edges):
     data = compute_edges(data)
     return data
 
-
-# Randomly select ~1000 samples
 def md17_pre_filter(data):
     return torch.rand(1) < 1.1
 
@@ -204,7 +202,7 @@ if __name__ == "__main__":
     problem.add_hyperparameter((1, 4), "num_conv_layers")  # discrete parameter
     problem.add_hyperparameter((3, 9), "num_radial")  # discrete parameter
     problem.add_hyperparameter((1, 3), "num_headlayers")  # discrete parameter
-    problem.add_hyperparameter((10, 100), "dim_headlayers")  # discrete parameter
+    problem.add_hyperparameter((10, 50), "dim_headlayers")  # discrete parameter
     ## Training
     problem.add_hyperparameter((1e-5, 1e-2), "learning_rate")  # continuous parameter
     problem.add_hyperparameter((8, 128), "batch_size")  # discrete parameter
@@ -216,14 +214,14 @@ if __name__ == "__main__":
         run,
         method="process",
         method_kwargs={
-            "num_workers": 16,
+            "num_workers": 1,
         },
     )
     search = CBO(problem, parallel_evaluator, random_state=42, log_dir=log_name)
 
     # Run
     timeout = 1200
-    results = search.search(max_evals=10, timeout=timeout)
+    results = search.search(max_evals=16, timeout=timeout)
     print(results)
 
     sys.exit(0)
