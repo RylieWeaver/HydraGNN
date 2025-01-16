@@ -225,7 +225,7 @@ if __name__ == "__main__":
         os.environ["SERIALIZED_DATA_PATH"] = os.getcwd()
     path = os.environ["SERIALIZED_DATA_PATH"]
 
-    filename = os.path.join(os.path.dirname(__file__), "md17.json")
+    filename = os.path.join(os.path.dirname(__file__), "md17_PNAEq.json")
     with open(filename, "r") as f:
         config = json.load(f)
 

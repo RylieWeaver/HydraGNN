@@ -7,7 +7,9 @@
         "Architecture": {
             "global_attn_engine": "",
             "global_attn_type": "",
-            "mpnn_type": "DimeNet",
+            "mpnn_type": "PNAEq",
+            "pe_dim": 5,
+            "global_attn_heads": 4,
             "radius": 7,
             "max_neighbours": 5,
             "num_radial": 5,
