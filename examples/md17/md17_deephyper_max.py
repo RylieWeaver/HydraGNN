@@ -43,13 +43,11 @@ def _parse_results(stdout):
 def run(trial, dequed=None):
     f = open(f"output-{trial.id}.txt", "w")
     python_exe = sys.executable
-    python_script = os.path.join(
-        os.path.dirname(__file__), "md17_deephyper_trial.py"
-    )
+    python_script = os.path.join(os.path.dirname(__file__), "md17_deephyper_trial.py")
 
     # TODO: Launch a subprocess with `srun` to train neural networks
     params = trial.parameters
-    log_name = "MO2" + "_" + str(trial.id)
+    log_name = "MD17" + "_" + str(trial.id)
     master_addr = f"HYDRAGNN_MASTER_ADDR={dequed[0]}"
     nodelist = ",".join(dequed)
 
@@ -74,7 +72,7 @@ def run(trial, dequed=None):
             python_exe,
             "-u",
             python_script,
-            f"--model_type={trial.parameters['model_type']}",
+            f"--mpnn_type={trial.parameters['mpnn_type']}",
             f"--hidden_dim={trial.parameters['hidden_dim']}",
             f"--num_conv_layers={trial.parameters['num_conv_layers']}",
             f"--num_sharedlayers={trial.parameters['num_sharedlayers']}",
@@ -88,7 +86,6 @@ def run(trial, dequed=None):
             ##f'--multi_model_list="ANI1x"',
             f"--num_epoch=300",
             f"--log={log_name}",
-            f"--compute_grad_energy",
         ]
     )
     print("Command = ", command, flush=True, file=f)
@@ -122,12 +119,17 @@ def run(trial, dequed=None):
 
 if __name__ == "__main__":
 
-    log_name = "MO2"
+    log_name = "MD17"
 
     # Choose the sampler (e.g., TPESampler or RandomSampler)
     from deephyper.evaluator import Evaluator, ProcessPoolEvaluator, queued
-    from deephyper.problem import HpProblem
-    from deephyper.search.hps import CBO
+
+    # ----- Frontier Version of Deephyper -----
+    from deephyper.hpo import CBO, HpProblem
+
+    # ----- Other version of Deephyper -----
+    # from deephyper.problem import HpProblem
+    # from deephyper.search.hps import CBO
     from hydragnn.utils.hpo.deephyper import read_node_list
 
     # define the variable you want to optimize
@@ -135,17 +137,12 @@ if __name__ == "__main__":
 
     # Define the search space for hyperparameters
     problem.add_hyperparameter((1, 5), "num_conv_layers")  # discrete parameter
-    problem.add_hyperparameter((100, 500), "hidden_dim")  # discrete parameter
+    problem.add_hyperparameter((50, 300), "hidden_dim")  # discrete parameter
     problem.add_hyperparameter((1, 5), "num_sharedlayers")  # discrete parameter
-    problem.add_hyperparameter((100, 500), "dim_sharedlayers")  # discrete parameter
+    problem.add_hyperparameter((40, 200), "dim_sharedlayers")  # discrete parameter
     problem.add_hyperparameter((1, 3), "num_headlayers")  # discrete parameter
-    problem.add_hyperparameter(
-        (100, 500), "dim_headlayers_graph"
-    )  # discrete parameter
-    problem.add_hyperparameter((100, 500), "dim_headlayers_node")  # discrete parameter
-    problem.add_hyperparameter(
-        ["PNA", "PNAPlus", "PNAEq", "PAINN", "EGNN", "SchNet", "DimeNet", "MACE"], "model_type"
-    )  # categorical parameter
+    problem.add_hyperparameter((100, 500), "dim_headlayers_graph")  # discrete parameter
+    problem.add_hyperparameter((40, 200), "dim_headlayers_node")  # discrete parameter
 
     # Create the node queue
     queue, _ = read_node_list()
@@ -180,7 +177,7 @@ if __name__ == "__main__":
     )
 
     timeout = None
-    results = search.search(max_evals=10000, timeout=timeout)
+    results = search.search(max_evals=100, timeout=timeout)
     print(results)
 
     sys.exit(0)
