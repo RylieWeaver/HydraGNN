@@ -22,17 +22,17 @@
                     "type": "mlp"
                 }
             },
-            "task_weights": [1.0, 1.0]
+            "task_weights": [1.0]
         },
         "Variables_of_interest": {
             "input_node_features": [0],
-            "output_index": [0, 1],
-            "type": ["node", "node"],
-            "output_dim": [1, 3],
-            "output_names": ["total_energy", "atomic_forces"]
+            "output_index": [0],
+            "type": ["node"],
+            "output_dim": [1],
+            "output_names": ["total_energy"]
         },
         "Training": {
-            "num_epoch": 2,
+            "num_epoch": 3,
             "perc_train": 0.8,
             "loss_function_type": "mse",
             "batch_size": 32,
