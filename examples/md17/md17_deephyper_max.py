@@ -72,7 +72,6 @@ def run(trial, dequed=None):
             python_exe,
             "-u",
             python_script,
-            f"--mpnn_type={trial.parameters['mpnn_type']}",
             f"--hidden_dim={trial.parameters['hidden_dim']}",
             f"--num_conv_layers={trial.parameters['num_conv_layers']}",
             f"--num_sharedlayers={trial.parameters['num_sharedlayers']}",
