@@ -176,7 +176,7 @@ if __name__ == "__main__":
     )
 
     timeout = None
-    results = search.search(max_evals=100, timeout=timeout)
+    results = search.search(max_evals=50, timeout=timeout)
     print(results)
 
     sys.exit(0)
