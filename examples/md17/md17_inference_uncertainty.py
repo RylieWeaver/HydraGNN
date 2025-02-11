@@ -40,6 +40,17 @@ import matplotlib.pyplot as plt
 plt.rcParams.update({"font.size": 16})
 
 
+# It's important to do this after scaling the data (not before)
+def create_y(train, val, test):
+    for dataset in [train, val, test]:
+        for data in dataset:
+            data.y = torch.cat(
+                [data.energy.view(-1, 1), data.forces.flatten().unsqueeze(-1)], dim=0
+            )
+
+    return train, val, test
+
+
 def get_log_name_config(config):
     return (
         config["NeuralNetwork"]["Architecture"]["model_type"]
@@ -108,7 +119,7 @@ def plot_scatter(x, y, hist2d_norm, xlabel, ylabel, title, filename):
 
 if __name__ == "__main__":
 
-    modelname = "md17_optuna_16"  # This should be changed to be the best model from HPO
+    modelname = "md17_optuna_5"  # This should be changed to be the best model from HPO
 
     parser = argparse.ArgumentParser(
         description="Evaluate HydraGNN Model on Test Dataset"
@@ -117,7 +128,7 @@ if __name__ == "__main__":
         "--inputfile",
         help="Path to the config JSON file",
         type=str,
-        default="./logs/md17_optuna_16/config.json",  # This should be changed to be the best model from HPO
+        default="./logs/md17_optuna_5/config.json",  # This should be changed to be the best model from HPO
     )
     args = parser.parse_args()
 
@@ -175,6 +186,7 @@ if __name__ == "__main__":
     trainset, valset, testset = minmax_scale_dataset(
         trainset, valset, testset, train_energy_min, train_energy_max
     )
+    trainset, valset, testset = create_y(trainset, valset, testset)
 
     # Initialize the model
     model = create_model_config(
@@ -198,7 +210,7 @@ if __name__ == "__main__":
     dataset_predictions = []
 
     # Disable gradient computation for evaluation
-    for data_id, data in enumerate(tqdm(testset, desc="Evaluating")):
+    for data_id, data in enumerate(tqdm(testset[:1000], desc="Evaluating")):
         # Prepare
         data = data.to(device)
         data.pos.requires_grad = True
@@ -244,11 +256,11 @@ if __name__ == "__main__":
         forces_true_list.extend(node_forces_true.flatten().tolist())
 
         # Collect dataset with predictions
-        data.energy = torch.tensor(energy_true)
-        data.energy_pred = torch.tensor(energy_pred)
-        data.forces = torch.tensor(node_forces_true)
-        data.forces_pred_direct = torch.tensor(node_forces_pred_direct)
-        data.forces_pred_grad = torch.tensor(node_forces_pred_grad)
+        data.energy = energy_true.clone().detach()
+        data.energy_pred = energy_pred.clone().detach()
+        data.forces = node_forces_true.clone().detach()
+        data.forces_pred_direct = node_forces_pred_direct.clone().detach()
+        data.forces_pred_grad = node_forces_pred_grad.clone().detach()
         dataset_predictions.append(data)
 
     # Compute R² scores

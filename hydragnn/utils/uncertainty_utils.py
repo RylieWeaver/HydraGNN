@@ -139,6 +139,8 @@ def calculate_metrics(dataset):
     energy_mse_list = []
     force_direct_mse_list = []
     force_grad_mse_list = []
+    force_direct_max_list = []
+    force_grad_max_list = []
     uncertainty_min_list = []
     uncertainty_max_list = []
     uncertainty_ma_list = []
@@ -167,6 +169,8 @@ def calculate_metrics(dataset):
         energy_mse = np.mean((energy_pred - energy_true) ** 2)
         force_direct_mse = np.mean((forces_pred_direct - forces_true) ** 2)
         force_grad_mse = np.mean((forces_pred_grad - forces_true) ** 2)
+        force_direct_max = np.max(np.abs(forces_pred_direct - forces_true))
+        force_grad_max = np.max(np.abs(forces_pred_grad - forces_true))
         uncertainty_min = np.min(np.abs(forces_pred_direct - forces_pred_grad))
         uncertainty_max = np.max(np.abs(forces_pred_direct - forces_pred_grad))
         uncertainty_ma = np.mean(np.abs(forces_pred_direct - forces_pred_grad))
@@ -179,6 +183,8 @@ def calculate_metrics(dataset):
         energy_mse_list.append(energy_mse)
         force_direct_mse_list.append(force_direct_mse)
         force_grad_mse_list.append(force_grad_mse)
+        force_direct_max_list.append(force_direct_max)
+        force_grad_max_list.append(force_grad_max)
         uncertainty_min_list.append(uncertainty_min)
         uncertainty_max_list.append(uncertainty_max)
         uncertainty_ma_list.append(uncertainty_ma)
@@ -191,6 +197,8 @@ def calculate_metrics(dataset):
         energy_mse_list,
         force_direct_mse_list,
         force_grad_mse_list,
+        force_direct_max_list,
+        force_grad_max_list,
         uncertainty_min_list,
         uncertainty_max_list,
         uncertainty_ma_list,

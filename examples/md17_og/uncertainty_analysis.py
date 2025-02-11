@@ -153,9 +153,6 @@ def plot_roc_like_curve(
     if c_values is None:
         ratio = errors / (uncertainties + 1e-15)  # small epsilon to avoid div-by-zero
         c_values = np.percentile(ratio, np.linspace(0, 100, 101))
-        # Force 0 to get (TPR=0, FPR=0) and infinity to get (TPR=1, FPR=1):
-        c_values = np.concatenate(([0.0], c_values, [float("inf")]))
-        c_values = np.unique(c_values)  # remove duplicates if any
 
     # Define threshold as the percentile of the error distribution
     threshold = np.percentile(errors, percentile)
@@ -293,7 +290,7 @@ def main():
     #     filename="plots/force_grad_uncertainty_Scatterplot.png",
     # )
 
-    # # Make a plot of forces_direct error vs forces_grad error and calculate R2
+    # Make a plot of forces_direct error vs forces_grad error and calculate R2
     # hist2d_norm = getcolordensity(force_direct_mse_list, force_grad_mse_list)
     # plot_scatter(
     #     x=force_direct_mse_list,
@@ -334,18 +331,6 @@ def main():
         error_list=force_grad_mse_list,
         uncertainty_list=uncertainty_ms_list,
         descriptor="Grad",
-        percentile=90,
-    )
-    plot_roc_like_curve(
-        error_list=force_direct_mse_list,
-        uncertainty_list=uncertainty_ms_list,
-        descriptor="Direct",
-        percentile=90,
-    )
-    plot_roc_like_curve(
-        error_list=force_grad_mse_list,
-        uncertainty_list=uncertainty_ms_list,
-        descriptor="Grad",
         percentile=95,
     )
     plot_roc_like_curve(
@@ -353,18 +338,6 @@ def main():
         uncertainty_list=uncertainty_ms_list,
         descriptor="Direct",
         percentile=95,
-    )
-    plot_roc_like_curve(
-        error_list=force_grad_mse_list,
-        uncertainty_list=uncertainty_ms_list,
-        descriptor="Grad",
-        percentile=99,
-    )
-    plot_roc_like_curve(
-        error_list=force_direct_mse_list,
-        uncertainty_list=uncertainty_ms_list,
-        descriptor="Direct",
-        percentile=99,
     )
 
 

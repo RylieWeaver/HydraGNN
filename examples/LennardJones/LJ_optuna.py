@@ -35,7 +35,6 @@ import hydragnn
 from hydragnn.utils.print.print_utils import log
 from hydragnn.utils.profiling_and_tracing.time_utils import Timer
 import hydragnn.utils.profiling_and_tracing.tracer as tr
-from hydragnn.preprocess.load_data import split_dataset
 from hydragnn.utils.datasets.distdataset import DistDataset
 from hydragnn.utils.datasets.pickledataset import (
     SimplePickleWriter,
@@ -54,6 +53,21 @@ from LJ_data import create_dataset, LJDataset, info
 # HPO
 import optuna
 import pandas as pd
+
+
+def custom_split_dataset(
+    dataset: [],
+    split_num: [],
+):
+    # We do this to ensure sufficient test samples for conclusions in inference
+    # despite not needing many train samples to get good accuracy
+    dataset = list(dataset)
+    trainset = dataset[: split_num[0]]
+    valset = dataset[split_num[0] : split_num[0] + split_num[1]]
+    testset = dataset[
+        split_num[0] + split_num[1] : split_num[0] + split_num[1] + split_num[2]
+    ]
+    return trainset, valset, testset
 
 
 def objective(trial):
@@ -78,9 +92,9 @@ def objective(trial):
 
     # Define the search space for hyperparameters
     ## Model Parameters
-    hidden_dim = trial.suggest_int("hidden_dim", 20, 300)
-    int_emb_size = trial.suggest_int("int_emb_size", 20, 80)
-    out_emb_size = trial.suggest_int("out_emb_size", 10, 40)
+    hidden_dim = trial.suggest_int("hidden_dim", 20, 100)
+    int_emb_size = trial.suggest_int("int_emb_size", 20, 60)
+    out_emb_size = trial.suggest_int("out_emb_size", 10, 30)
     num_before_skip = trial.suggest_int("num_before_skip", 1, 3)
     num_after_skip = trial.suggest_int("num_after_skip", 1, 3)
     basis_emb_size = trial.suggest_int("basis_emb_size", 5, 20)
@@ -300,11 +314,11 @@ if __name__ == "__main__":
             dist=True,
         )
         ## This is a local split
-        trainset, valset, testset = split_dataset(
+        trainset, valset, testset = custom_split_dataset(
             dataset=total,
-            perc_train=config["NeuralNetwork"]["Training"]["perc_train"],
-            stratify_splitting=False,
+            split_num=[8000, 1000, 10000],
         )
+        # Make testset whole dataset
         print("Local splitting: ", len(total), len(trainset), len(valset), len(testset))
 
         deg = gather_deg(trainset)

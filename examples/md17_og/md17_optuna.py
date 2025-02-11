@@ -57,9 +57,8 @@ def md17_pre_transform(data):
     # node_feature_dim = [1]
     data = compute_edges(data)
     # data = rotate_data(data)
-    # # NOTE  It may important to have data from various orientations in order to truly represent energy/force predictions.
-    # #       I was getting a R2 score of 0.6 with invariant prediction, which indicates that the data wasn't truly spanning
-    # #       the force-energy space.
+    # # NOTE  I was getting a R2 score of 0.6 with invariant prediction, which indicates that the data wasn't representatice
+    # #       of the true distribution.
     return data
 
 

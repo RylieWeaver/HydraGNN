@@ -1,51 +1,54 @@
 ##############################################################################
-# Copyright (c) 2024, Oak Ridge National Laboratory                          #
-# All rights reserved.                                                       #
-#                                                                            #
-# This file is part of HydraGNN and is distributed under a BSD 3-clause      #
-# license. For the licensing terms see the LICENSE file in the top-level     #
-# directory.                                                                 #
-#                                                                            #
-# SPDX-License-Identifier: BSD-3-Clause                                      #
+# Copyright (c) 2024, Oak Ridge National Laboratory
+# All rights reserved.
+#
+# This file is part of HydraGNN and is distributed under a BSD 3-clause
+# license. For the licensing terms see the LICENSE file in the top-level
+# directory.
+#
+# SPDX-License-Identifier: BSD-3-Clause
 ##############################################################################
 
-import json, os
+import json
+import os
 import sys
-import logging
-import pickle
 from tqdm import tqdm
-from mpi4py import MPI
 import argparse
+from mpi4py import MPI
 
 import torch
-import torch_scatter
 import numpy as np
 from torch_geometric.data import Data
 
 import hydragnn
 from hydragnn.utils.profiling_and_tracing.time_utils import Timer
-from hydragnn.utils.distributed import get_device
+from hydragnn.utils.distributed import get_device, setup_ddp
 from hydragnn.utils.model import load_existing_model
-from hydragnn.utils.datasets.pickledataset import SimplePickleDataset
-from hydragnn.utils.input_config_parsing.config_utils import (
-    update_config,
-)
 from hydragnn.models.create import create_model_config
-from hydragnn.preprocess import create_dataloaders
+from hydragnn.utils.uncertainty_utils import (
+    minmax_scale_dataset,
+    load_scaling,
+    reverse_minmax_scale_data,
+)
 
 from scipy.interpolate import griddata
 
-try:
-    from hydragnn.utils.datasets.adiosdataset import AdiosWriter, AdiosDataset
-except ImportError:
-    pass
-
-from LJ_data import info
 from sklearn.metrics import r2_score
 
 import matplotlib.pyplot as plt
 
 plt.rcParams.update({"font.size": 16})
+
+
+# It's important to do this after scaling the data (not before)
+def create_y(train, val, test):
+    for dataset in [train, val, test]:
+        for data in dataset:
+            data.y = torch.cat(
+                [data.energy.view(-1, 1), data.forces.flatten().unsqueeze(-1)], dim=0
+            )
+
+    return train, val, test
 
 
 def get_log_name_config(config):
@@ -79,27 +82,24 @@ def get_log_name_config(config):
 
 
 def getcolordensity(xdata, ydata):
-    ###############################
     nbin = 20
     hist2d, xbins_edge, ybins_edge = np.histogram2d(x=xdata, y=ydata, bins=[nbin, nbin])
-    xbin_cen = 0.5 * (xbins_edge[0:-1] + xbins_edge[1:])
-    ybin_cen = 0.5 * (ybins_edge[0:-1] + ybins_edge[1:])
+    xbin_cen = 0.5 * (xbins_edge[:-1] + xbins_edge[1:])
+    ybin_cen = 0.5 * (ybins_edge[:-1] + ybins_edge[1:])
     BCTY, BCTX = np.meshgrid(ybin_cen, xbin_cen)
     hist2d = hist2d / np.amax(hist2d)
-    print(np.amax(hist2d))
+    print(f"Maximum normalized histogram value: {np.amax(hist2d)}")
 
-    bctx1d = np.reshape(BCTX, len(xbin_cen) * nbin)
-    bcty1d = np.reshape(BCTY, len(xbin_cen) * nbin)
-    loc_pts = np.zeros((len(xbin_cen) * nbin, 2))
-    loc_pts[:, 0] = bctx1d
-    loc_pts[:, 1] = bcty1d
+    bctx1d = BCTX.flatten()
+    bcty1d = BCTY.flatten()
+    loc_pts = np.vstack((bctx1d, bcty1d)).T
     hist2d_norm = griddata(
         loc_pts,
-        hist2d.reshape(len(xbin_cen) * nbin),
+        hist2d.flatten(),
         (xdata, ydata),
         method="linear",
         fill_value=0,
-    )  # np.nan)
+    )
     return hist2d_norm
 
 
@@ -119,46 +119,38 @@ def plot_scatter(x, y, hist2d_norm, xlabel, ylabel, title, filename):
 
 if __name__ == "__main__":
 
-    modelname = "LJ_optuna_16"  # 38, 33 32, show lines   37 shows scatter?
+    modelname = "md17_optuna_4"  # This should be changed to be the best model from HPO
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Evaluate HydraGNN Model on Test Dataset"
+    )
     parser.add_argument(
         "--inputfile",
-        help="input file",
+        help="Path to the config JSON file",
         type=str,
-        default="./logs/LJ_optuna_16/config.json",
+        default="./logs/md17_optuna_4/config.json",  # This should be changed to be the best model from HPO
     )
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "--adios",
-        help="Adios gan_dataset",
-        action="store_const",
-        dest="format",
-        const="adios",
-    )
-    group.add_argument(
-        "--pickle",
-        help="Pickle gan_dataset",
-        action="store_const",
-        dest="format",
-        const="pickle",
-    )
-    parser.set_defaults(format="pickle")
-
     args = parser.parse_args()
 
     dirpwd = os.path.dirname(os.path.abspath(__file__))
     input_filename = os.path.join(dirpwd, args.inputfile)
+    if not os.path.isfile(input_filename):
+        print(f"Config file not found: {input_filename}")
+        sys.exit(1)
+
     with open(input_filename, "r") as f:
         config = json.load(f)
-    hydragnn.utils.print.setup_log(get_log_name_config(config))
-    ##################################################################################################################
-    # Always initialize for multi-rank training.
-    comm_size, rank = hydragnn.utils.distributed.setup_ddp()
-    ##################################################################################################################
-    comm = MPI.COMM_WORLD
 
-    datasetname = "LJ"
+    hydragnn.utils.print.setup_log(get_log_name_config(config))
+    print("Configuration loaded and logging setup.")
+
+    ##################################################################################################################
+    # Initialize Distributed Data Parallel (DDP) if applicable
+    comm_size, rank = setup_ddp()
+    ##################################################################################################################
+    comm = MPI.COMM_WORLD  # Assuming MPI is being used elsewhere as per original script
+
+    datasetname = "MD17"
 
     comm.Barrier()
 
@@ -168,41 +160,43 @@ if __name__ == "__main__":
     except:
         os.environ["SERIALIZED_DATA_PATH"] = os.getcwd()
     serialized_data_path = os.environ.get("SERIALIZED_DATA_PATH")
+    train_path = os.path.join(serialized_data_path, "train_dataset.pt")
+    val_path = os.path.join(serialized_data_path, "val_dataset.pt")
+    test_path = os.path.join(serialized_data_path, "test_dataset.pt")
 
-    timer = Timer("load_data")
-    timer.start()
-    if args.format == "pickle":
-        info("Pickle load")
-        basedir = os.path.join(
-            os.path.dirname(__file__), "dataset", "%s.pickle" % datasetname
+    # Check if the files exist
+    if not all(os.path.isfile(p) for p in [train_path, val_path, test_path]):
+        raise FileNotFoundError(
+            f"One or more dataset files not found in {serialized_data_path}. "
+            "Ensure that 'train_dataset.pt', 'val_dataset.pt', and 'test_dataset.pt' exist."
         )
-        trainset = SimplePickleDataset(
-            basedir=basedir,
-            label="trainset",
-            var_config=config["NeuralNetwork"]["Variables_of_interest"],
-        )
-        valset = SimplePickleDataset(
-            basedir=basedir,
-            label="valset",
-            var_config=config["NeuralNetwork"]["Variables_of_interest"],
-        )
-        testset = SimplePickleDataset(
-            basedir=basedir,
-            label="testset",
-            var_config=config["NeuralNetwork"]["Variables_of_interest"],
-        )
-        pna_deg = trainset.pna_deg
-    else:
-        raise NotImplementedError("No supported format: %s" % (args.format))
 
+    # Load the datasets
+    trainset = torch.load(train_path)
+    valset = torch.load(val_path)
+    testset = torch.load(test_path)
+    print(f"Loaded train set with {len(trainset)} samples.")
+    print(f"Loaded val set with {len(valset)} samples.")
+    print(f"Loaded test set with {len(testset)} samples.")
+
+    # Scale the data
+    train_energy_min, train_energy_max = load_scaling(
+        os.path.join(serialized_data_path, "scaling.pt")
+    )
+    trainset, valset, testset = minmax_scale_dataset(
+        trainset, valset, testset, train_energy_min, train_energy_max
+    )
+    trainset, valset, testset = create_y(trainset, valset, testset)
+
+    # Initialize the model
     model = create_model_config(
         config=config["NeuralNetwork"],
         verbosity=config["Verbosity"]["level"],
     )
-
     model = torch.nn.parallel.DistributedDataParallel(model)
-
     load_existing_model(model, modelname, path="./logs/")
+
+    # Prepare model
     device = get_device()
     model.to(device)
     model.eval()
@@ -237,6 +231,23 @@ if __name__ == "__main__":
         energy_true = data.energy
         node_forces_true = data.forces
 
+        # Descale
+        (
+            energy_pred,
+            energy_true,
+            node_forces_pred_direct,
+            node_forces_pred_grad,
+            node_forces_true,
+        ) = reverse_minmax_scale_data(
+            energy_pred,
+            energy_true,
+            node_forces_pred_direct,
+            node_forces_pred_grad,
+            node_forces_true,
+            train_energy_min,
+            train_energy_max,
+        )
+
         # Collect lists
         energy_pred_list.extend(energy_pred.tolist())
         energy_true_list.extend(energy_true.tolist())
@@ -245,11 +256,11 @@ if __name__ == "__main__":
         forces_true_list.extend(node_forces_true.flatten().tolist())
 
         # Collect dataset with predictions
-        data.energy = torch.tensor(energy_true)
-        data.energy_pred = torch.tensor(energy_pred)
-        data.forces = torch.tensor(node_forces_true)
-        data.forces_pred_direct = torch.tensor(node_forces_pred_direct)
-        data.forces_pred_grad = torch.tensor(node_forces_pred_grad)
+        data.energy = energy_true.clone().detach()
+        data.energy_pred = energy_pred.clone().detach()
+        data.forces = node_forces_true.clone().detach()
+        data.forces_pred_direct = node_forces_pred_direct.clone().detach()
+        data.forces_pred_grad = node_forces_pred_grad.clone().detach()
         dataset_predictions.append(data)
 
     # Compute R² scores
@@ -274,9 +285,9 @@ if __name__ == "__main__":
         x=energy_true_list,
         y=energy_pred_list,
         hist2d_norm=hist2d_norm,
-        xlabel="Predicted",
-        ylabel="True",
-        title="Lennard-Jones Energy Plot",
+        xlabel="True Energy",
+        ylabel="Predicted Energy",
+        title="Energy Prediction Scatter Plot",
         filename="./energy_Scatterplot.png",
     )
 
@@ -286,9 +297,9 @@ if __name__ == "__main__":
         x=forces_pred_direct_list,
         y=forces_true_list,
         hist2d_norm=hist2d_norm,
-        xlabel="Predicted (Direct)",
-        ylabel="True",
-        title="Lennard-Jones Forces Plot",
+        xlabel="Predicted Forces (Direct)",
+        ylabel="True Forces",
+        title="Forces Direct Prediction Scatter Plot",
         filename="./Forces_Scatterplot_direct.png",
     )
 
@@ -298,9 +309,9 @@ if __name__ == "__main__":
         x=forces_pred_grad_list,
         y=forces_true_list,
         hist2d_norm=hist2d_norm,
-        xlabel="Predicted (Grad)",
-        ylabel="True",
-        title="Lennard-Jones Forces Plot",
+        xlabel="Predicted Forces (Grad)",
+        ylabel="True Forces",
+        title="Forces Gradient Prediction Scatter Plot",
         filename="./Forces_Scatterplot_grad.png",
     )
 
