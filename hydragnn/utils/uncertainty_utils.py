@@ -72,69 +72,6 @@ def reverse_minmax_scale_data(
     return energy_pred, energy_true, forces_pred_direct, forces_pred_grad, forces_true
 
 
-def rotate_data(data):
-    """
-    Rotate the positions and forces in data.pos by a random angle/axis.
-    """
-    # Convert angle to radians
-    angle_degrees = np.random.uniform(0, 360)
-    angle_radians = math.radians(angle_degrees)
-
-    # Define rotation matrix based on the axis
-    axis = np.random.choice(["x", "y", "z"])
-    if axis == "x":
-        rotation_matrix = torch.tensor(
-            [
-                [1, 0, 0],
-                [0, math.cos(angle_radians), -math.sin(angle_radians)],
-                [0, math.sin(angle_radians), math.cos(angle_radians)],
-            ]
-        )
-    elif axis == "y":
-        rotation_matrix = torch.tensor(
-            [
-                [math.cos(angle_radians), 0, math.sin(angle_radians)],
-                [0, 1, 0],
-                [-math.sin(angle_radians), 0, math.cos(angle_radians)],
-            ]
-        )
-    elif axis == "z":
-        rotation_matrix = torch.tensor(
-            [
-                [math.cos(angle_radians), -math.sin(angle_radians), 0],
-                [math.sin(angle_radians), math.cos(angle_radians), 0],
-                [0, 0, 1],
-            ]
-        )
-    else:
-        raise ValueError("Invalid axis. Choose from 'x', 'y', or 'z'.")
-
-    # Rotate positions
-    data.pos = torch.matmul(data.pos, rotation_matrix.T)
-    data.forces = torch.matmul(data.forces, rotation_matrix.T)
-    data.force = torch.matmul(data.force, rotation_matrix.T)
-
-    return data
-
-
-def rotate_dataset(dataset):
-    """
-    Rotate the positions in a dataset of PyTorch Geometric data objects by a specified angle around a given axis.
-
-    Args:
-        dataset: A PyTorch Geometric dataset.
-        angle_degrees (float): The rotation angle in degrees.
-        axis (str): The axis of rotation ('x', 'y', or 'z').
-
-    Returns:
-        rotated_dataset: A new PyTorch Geometric dataset with rotated positions.
-    """
-    for data in dataset:
-        data = rotate_data(data)
-
-    return dataset
-
-
 def calculate_metrics(dataset):
     energy_mse_list = []
     force_direct_mse_list = []
